@@ -70,9 +70,12 @@ window it doesn't own.
 `hooks.json` targets `127.0.0.1:7788`. Claude Code substitutes `${user_config.*}`
 into hook *commands* but not into an `http` handler's `url`, so a configurable
 address would mean shipping a script and taking on an interpreter dependency —
-which costs every user something to serve a few. If your `config.toml` says
-otherwise, or blip runs on another machine on your LAN, skip the plugin and put
-the same hooks in your own `settings.json` with the right address.
+which costs every user something to serve a few.
+
+So if blip listens on another port, or runs on another machine on your LAN,
+skip the plugin and put the same hooks in your own `settings.json` with the
+right address. blip listens on `0.0.0.0` by default, so the remote case needs
+nothing changed on blip's side — just the host in the URL.
 
 ## Turning it off
 

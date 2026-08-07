@@ -13,9 +13,15 @@ use crate::model::Level;
 pub struct Config {
     /// Listen address for the HTTP transport, which is always on.
     ///
-    /// There is no authentication. Loopback is therefore the only address that
-    /// is safe unattended — anything else lets every host that can reach it put
-    /// content on a topmost window on your screen.
+    /// **There is no authentication.** The default accepts from anywhere, so
+    /// that a Claude Code session or a build on another machine can reach the
+    /// panel without editing a file first — which is most of the point of
+    /// having an HTTP transport at all.
+    ///
+    /// The consequence is real: every host that can reach this port can put
+    /// arbitrary content on a topmost window on your screen. Fine on a home
+    /// network or behind Tailscale. On a network you don't control, set this
+    /// to `127.0.0.1:7788`.
     pub bind: String,
 
     /// Hard cap on retained rows. Oldest are evicted first.
@@ -192,9 +198,9 @@ impl Theme {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            bind: "127.0.0.1:7788".into(),
+            bind: "0.0.0.0:7788".into(),
             max_items: 50,
-            max_visible_rows: 5,
+            max_visible_rows: 10,
             width: 340.0,
             // Yahei is on every Chinese Windows install and DirectWrite handles
             // fallback for anything it lacks.

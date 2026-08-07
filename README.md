@@ -67,7 +67,8 @@ some-long-task; blip --exit-code $LASTEXITCODE "任务结束"
 
 ## HTTP
 
-Always on, loopback by default. `blip --config` writes a config file.
+Always on, and by default reachable from your network. `blip --config` writes a
+config file.
 
 ```bash
 # The one-liner that matters: anything that speaks HTTP can use this.
@@ -121,10 +122,15 @@ selected it. And `if_idle` can only be answered by whoever owns a window —
 `GetLastInputInfo` is not a question a hook script can usefully ask, which is
 the clearest case for the mapping living in `src/ipc/hook.rs`.
 
-**There is no authentication.** Loopback is therefore the only address that is
-safe to leave running unattended. Setting `bind = "0.0.0.0:7788"` lets every host
-that can reach the port put arbitrary content on a topmost window on your screen
-— fine on a trusted LAN or behind Tailscale, not on anything public.
+**There is no authentication, and `bind` defaults to `0.0.0.0:7788`.** That is
+the point of the HTTP transport — a build box, a NAS, or a Claude Code session
+on your other machine reaches the panel without anyone editing a file first —
+but the consequence is real: every host that can reach the port can put
+arbitrary content on a topmost window on your screen. Fine on a home network or
+behind Tailscale. On a network you don't control, set `bind = "127.0.0.1:7788"`.
+
+Windows will ask to allow the port through the firewall the first time. Answering
+"private networks only" is the setting that matches the above.
 
 ---
 
@@ -229,9 +235,9 @@ working default; a malformed file falls back to defaults and reports itself as a
 critical notification rather than refusing to start.
 
 ```toml
-bind = "127.0.0.1:7788"   # no auth — loopback is the only safe unattended value
+bind = "0.0.0.0:7788"     # no auth — see the warning under HTTP
 max_items = 50
-max_visible_rows = 5
+max_visible_rows = 10     # panel grows to this many rows, then scrolls
 width = 340.0
 font = "Microsoft YaHei UI"
 
