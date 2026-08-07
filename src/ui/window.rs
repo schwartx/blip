@@ -802,7 +802,7 @@ impl Panel {
                         if !Config::path().exists() {
                             let _ = Config::write_default();
                         }
-                        run_action(&format!("start \"\" \"{}\"", Config::path().display()));
+                        open_in_editor(&Config::path());
                     }
                     MenuAction::Quit => {
                         self.quit = true;
@@ -849,11 +849,54 @@ fn ease(t: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Run a user-supplied `--action` through the shell.
+///
+/// `raw_arg`, not `arg`: Rust quotes arguments per `CommandLineToArgvW`, but
+/// `cmd.exe` does not parse its command line by those rules, so any action
+/// containing a quote or a path with spaces arrives mangled. `/S` tells cmd to
+/// strip exactly the outer quote pair and take the rest verbatim, which is the
+/// only reliable way to hand it an arbitrary string.
 fn run_action(cmd: &str) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let _ = std::process::Command::new("cmd")
-        .args(["/C", cmd])
+    let mut c = std::process::Command::new("cmd.exe");
+    c.raw_arg(format!("/S /C \"{cmd}\""));
+    c.creation_flags(CREATE_NO_WINDOW);
+    let _ = c.spawn();
+}
+
+/// Open a file for editing, without ever getting stuck on a dialog.
+///
+/// `.toml` has no registered handler on a stock Windows install, and `start ""`
+/// on an unassociated file doesn't fail — it puts up a modal "how do you want to
+/// open this file?" picker. From a tray menu that reads as the app hanging.
+/// So: ask the shell first, and fall back to Notepad, which is always present.
+fn open_in_editor(path: &std::path::Path) {
+    use windows::Win32::UI::Shell::ShellExecuteW;
+
+    let file = wide(&path.to_string_lossy());
+    let verb = wide("open");
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            PCWSTR(verb.as_ptr()),
+            PCWSTR(file.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+
+    // ShellExecuteW returns a pseudo-HINSTANCE; anything <= 32 is an error code,
+    // and the one we expect here is ERROR_NO_ASSOCIATION (31).
+    if result.0 as usize > 32 {
+        return;
+    }
+
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let _ = std::process::Command::new("notepad.exe")
+        .arg(path)
         .creation_flags(CREATE_NO_WINDOW)
         .spawn();
 }
