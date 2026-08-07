@@ -11,7 +11,8 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, HICON, IDI_APPLICATION,
-    IDI_INFORMATION, LoadIconW, MF_GRAYED, MF_SEPARATOR, MF_STRING, SetForegroundWindow,
+    IDI_INFORMATION, LoadIconW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING,
+    SetForegroundWindow,
     TPM_BOTTOMALIGN,
     TPM_RETURNCMD, TPM_RIGHTALIGN, TrackPopupMenu,
 };
@@ -27,6 +28,7 @@ pub enum MenuAction {
     ClearAll,
     ResetPosition,
     OpenConfig,
+    ToggleAutostart,
     Quit,
     None,
 }
@@ -35,7 +37,8 @@ const CMD_SHOW: u32 = 1;
 const CMD_CLEAR: u32 = 2;
 const CMD_RESET: u32 = 3;
 const CMD_CONFIG: u32 = 4;
-const CMD_QUIT: u32 = 5;
+const CMD_AUTOSTART: u32 = 5;
+const CMD_QUIT: u32 = 6;
 
 pub struct Tray {
     hwnd: HWND,
@@ -93,7 +96,7 @@ impl Tray {
     /// Right-click menu. `SetForegroundWindow` before `TrackPopupMenu` is the
     /// documented workaround for the menu refusing to dismiss when clicked away
     /// from — it has been required since Windows 95 and still is.
-    pub fn show_menu(&self, pinned: bool, count: usize) -> MenuAction {
+    pub fn show_menu(&self, pinned: bool, count: usize, autostart: bool) -> MenuAction {
         let Ok(menu) = (unsafe { CreatePopupMenu() }) else { return MenuAction::None };
 
         // Carrying the count in the label means the menu answers "is there
@@ -111,6 +114,7 @@ impl Tray {
             "位置：跟随光标（拖动面板可固定）"
         });
         let config = wide("打开配置文件");
+        let boot = wide("开机自动启动");
         let quit = wide("退出 blip");
 
         // The rule for this whole menu: if an item can't do anything in the
@@ -118,6 +122,9 @@ impl Tray {
         // is indistinguishable from a bug.
         let when_any = if count == 0 { MF_STRING | MF_GRAYED } else { MF_STRING };
         let when_pinned = if pinned { MF_STRING } else { MF_STRING | MF_GRAYED };
+        // A checkmark, not a label that flips between "启用"/"禁用" — the latter
+        // is always ambiguous about whether it names the state or the action.
+        let boot_flags = if autostart { MF_STRING | MF_CHECKED } else { MF_STRING };
 
         unsafe {
             let _ = AppendMenuW(menu, when_any, CMD_SHOW as usize, PCWSTR(show.as_ptr()));
@@ -125,6 +132,7 @@ impl Tray {
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let _ = AppendMenuW(menu, when_pinned, CMD_RESET as usize, PCWSTR(reset.as_ptr()));
             let _ = AppendMenuW(menu, MF_STRING, CMD_CONFIG as usize, PCWSTR(config.as_ptr()));
+            let _ = AppendMenuW(menu, boot_flags, CMD_AUTOSTART as usize, PCWSTR(boot.as_ptr()));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let _ = AppendMenuW(menu, MF_STRING, CMD_QUIT as usize, PCWSTR(quit.as_ptr()));
 
@@ -148,6 +156,7 @@ impl Tray {
                 CMD_CLEAR => MenuAction::ClearAll,
                 CMD_RESET => MenuAction::ResetPosition,
                 CMD_CONFIG => MenuAction::OpenConfig,
+                CMD_AUTOSTART => MenuAction::ToggleAutostart,
                 CMD_QUIT => MenuAction::Quit,
                 _ => MenuAction::None,
             }

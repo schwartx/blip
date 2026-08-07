@@ -29,6 +29,11 @@ fn main() {
         Err(_) => return,
     };
 
+    // We are the daemon, so whatever path the Run key holds should be ours.
+    // Corrects the entry after a move or reinstall, which would otherwise leave
+    // a checked menu item pointing at an exe that no longer exists.
+    blip::ui::autostart::heal();
+
     let (tx, rx) = channel::<Command>();
     let (bridge, wake) = Bridge::new(tx);
 

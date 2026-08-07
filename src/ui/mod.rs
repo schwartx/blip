@@ -1,6 +1,7 @@
 //! The panel: window, renderer, layout, positioning, tray, audio.
 
 pub mod audio;
+pub mod autostart;
 pub mod layout;
 pub mod position;
 pub mod render;

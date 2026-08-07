@@ -40,6 +40,7 @@ use crate::ipc::pipe::PipeServer;
 use crate::model::{Command, Level};
 use crate::store::{Store, TickCtx};
 use crate::ui::audio::Audio;
+use crate::ui::autostart;
 use crate::ui::layout::{Hit, Layout, Metrics};
 use crate::ui::position::{self, Anchor, Placement};
 use crate::ui::render::{Frame, Renderer};
@@ -368,6 +369,31 @@ impl Panel {
         if popped {
             self.show();
         }
+        self.refresh_tray();
+        self.request_frame();
+    }
+
+    /// Post a notification about blip itself.
+    ///
+    /// A fixed id per message means repeated toggling updates one row in place
+    /// instead of stacking — the same rule everything else here follows.
+    fn notify_self(&mut self, title: &str, body: Option<String>, level: Level) {
+        let cfg = self.cfg.clone();
+        let a = self.store.push(
+            crate::model::NotifyRequest {
+                title: title.into(),
+                body,
+                level: Some(level),
+                id: Some("blip-self".into()),
+                source: Some("blip".into()),
+                ..Default::default()
+            },
+            &cfg,
+        );
+        if a.sound {
+            self.audio.play(a.level);
+        }
+        self.show();
         self.refresh_tray();
         self.request_frame();
     }
@@ -795,7 +821,7 @@ impl Panel {
                 let pinned = self.pinned();
                 let count = self.store.live_count();
                 let action = match self.tray.as_ref() {
-                    Some(t) => t.show_menu(pinned, count),
+                    Some(t) => t.show_menu(pinned, count, autostart::is_enabled()),
                     None => MenuAction::None,
                 };
                 match action {
@@ -814,6 +840,25 @@ impl Panel {
                             let _ = Config::write_default();
                         }
                         open_in_editor(&Config::path());
+                    }
+                    // Report through the panel rather than a message box: a
+                    // toggle that silently didn't take is worse than a noisy
+                    // failure, and we already own the notification surface.
+                    MenuAction::ToggleAutostart => {
+                        let want = !autostart::is_enabled();
+                        if autostart::set(want) {
+                            self.notify_self(
+                                if want { "已设为开机自动启动" } else { "已取消开机自动启动" },
+                                None,
+                                Level::Normal,
+                            );
+                        } else {
+                            self.notify_self(
+                                "无法修改开机自动启动",
+                                Some("写入 HKCU\\...\\CurrentVersion\\Run 失败".into()),
+                                Level::Critical,
+                            );
+                        }
                     }
                     MenuAction::Quit => {
                         self.quit = true;
