@@ -1,0 +1,202 @@
+name: release
+
+# Tag-triggered. `workflow_dispatch` builds everything and leaves the artifacts
+# attached to the run, but does not publish — so the pipeline can be exercised
+# without cutting a release nobody wanted.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The changelog step walks back to the previous tag, which a shallow
+          # clone doesn't have.
+          fetch-depth: 0
+
+      # Deliberately rustup rather than a toolchain action: rustup is already on
+      # the runner, and it keeps the supply chain down to first-party actions.
+      - name: Rust toolchain
+        shell: pwsh
+        run: |
+          rustup update --no-self-update stable
+          rustup default stable
+          rustup component add clippy
+          rustc --version
+          cargo --version
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      # The installer takes its filename from Cargo.toml, so a tag that
+      # disagrees with it would publish blip-0.1.0-setup.exe under a v0.2.0
+      # release. Fail here rather than ship the mismatch.
+      - name: Resolve version
+        id: v
+        shell: pwsh
+        run: |
+          $cargo = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"').Matches[0].Groups[1].Value
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $version = $env:GITHUB_REF_NAME -replace '^v', ''
+            if ($version -ne $cargo) {
+              Write-Host "::error::tag $env:GITHUB_REF_NAME implies version $version, but Cargo.toml says $cargo"
+              exit 1
+            }
+          } else {
+            $version = $cargo
+          }
+          "version=$version"  | Out-File $env:GITHUB_OUTPUT -Append
+          "prerelease=$(if ($version -match '-') { 'true' } else { 'false' })" |
+            Out-File $env:GITHUB_OUTPUT -Append
+          Write-Host "building blip $version"
+
+      - name: Test
+        run: cargo test --locked
+
+      # Only clippy gets `-D warnings`. Setting RUSTFLAGS job-wide would apply
+      # it to dependencies too, so a new compiler warning in someone else's
+      # crate would break releases here.
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Build
+        run: cargo build --release --locked
+
+      # windows-latest ships Inno Setup 6, but the image contents are not a
+      # contract. Install it if a future image drops it, rather than discovering
+      # that at the packaging step.
+      - name: Ensure Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (Test-Path $iscc) {
+            Write-Host "found $iscc"
+          } else {
+            Write-Host 'Inno Setup not on the image; installing'
+            choco install innosetup --no-progress -y
+          }
+          exit 0
+
+      # -NoBuild: the binaries and tests are already done above, as separate
+      # steps so a failure points at which one.
+      - name: Package installer
+        shell: pwsh
+        run: ./build-installer.ps1 -NoBuild
+
+      # A portable zip alongside the installer costs one step, and it is what a
+      # scoop manifest or a locked-down machine would consume.
+      - name: Portable zip
+        shell: pwsh
+        run: |
+          $v = '${{ steps.v.outputs.version }}'
+          $stage = "dist/blip-$v-win64"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -Path target/release/blip.exe, target/release/blipd.exe, README.md -Destination $stage
+          Compress-Archive -Path "$stage/*" -DestinationPath "dist/blip-$v-win64.zip" -Force
+          Remove-Item -Recurse -Force $stage
+
+      - name: Checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -Include *.exe, *.zip -Recurse |
+            Get-FileHash -Algorithm SHA256 |
+            ForEach-Object { '{0}  {1}' -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) } |
+            Set-Content dist/SHA256SUMS.txt -Encoding ascii
+          Get-Content dist/SHA256SUMS.txt
+
+      - name: Upload run artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: blip-${{ steps.v.outputs.version }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $v = '${{ steps.v.outputs.version }}'
+          $tag = $env:GITHUB_REF_NAME
+
+          # Pin the decoding of native-command output. git emits UTF-8, but
+          # PowerShell decodes it with the console codepage — on a non-UTF-8
+          # codepage a commit subject containing ✕ or CJK comes back mangled,
+          # and the mangling swallowed the line break between entries.
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $OutputEncoding = [System.Text.Encoding]::UTF8
+
+          # A first release has no predecessor, and `git describe` exits
+          # non-zero for that. Swallow it and fall back to the whole history.
+          $prev = $null
+          try { $prev = git describe --tags --abbrev=0 "$tag^" 2>$null } catch { }
+          $global:LASTEXITCODE = 0
+
+          $log = if ($prev) {
+            git log --no-merges --pretty=format:'- %s' "$prev..$tag"
+          } else {
+            git log --no-merges --pretty=format:'- %s'
+          }
+          $global:LASTEXITCODE = 0
+
+          # An array, not a here-string: a PowerShell here-string has to close
+          # with '@ at column zero, which would terminate this YAML block
+          # scalar. Single quotes keep the markdown backticks literal.
+          $lines = @(
+            '## 安装',
+            '',
+            '**安装包** — `blip-VERSION-setup.exe`，双击即可。装到',
+            '`%LOCALAPPDATA%\Programs\blip`，全程不需要管理员权限，安装时可选加入 PATH 和开机自启。',
+            '',
+            '**便携版** — `blip-VERSION-win64.zip`，解压即用。`blip.exe` 会在需要时自己拉起',
+            '`blipd.exe`，不必手动启动守护进程。',
+            '',
+            '> 安装包没有代码签名，首次运行 SmartScreen 会拦一次：点「更多信息」→「仍要运行」。',
+            '',
+            '文件校验和见 `SHA256SUMS.txt`。',
+            '',
+            '## 变更',
+            ''
+          )
+          $notes = (($lines -join "`n").Replace('VERSION', $v)) + "`n" + ($log -join "`n") + "`n"
+          Set-Content -Path release-notes.md -Value $notes -Encoding utf8
+          Get-Content release-notes.md
+          exit 0
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = '${{ steps.v.outputs.version }}'
+          # Not $args — that is an automatic variable in PowerShell.
+          $ghArgs = @(
+            'release', 'create', $env:GITHUB_REF_NAME,
+            "dist/blip-$v-setup.exe",
+            "dist/blip-$v-win64.zip",
+            'dist/SHA256SUMS.txt',
+            '--title', "blip $v",
+            '--notes-file', 'release-notes.md'
+          )
+          if ('${{ steps.v.outputs.prerelease }}' -eq 'true') { $ghArgs += '--prerelease' }
+          gh @ghArgs

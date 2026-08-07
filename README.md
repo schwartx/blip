@@ -237,6 +237,20 @@ with optional checkboxes for PATH and autostart. Uninstall stops the daemon
 entry and the `Run` value, and leaves `%APPDATA%\blip` alone unless you say
 otherwise.
 
+### Releasing
+
+Push a tag and `.github/workflows/release.yml` does the rest — tests, clippy,
+the installer, a portable zip, SHA-256 sums, and a GitHub Release:
+
+```bash
+# Cargo.toml's version must already match; the workflow fails loudly if not,
+# because otherwise a v0.2.0 tag publishes blip-0.1.0-setup.exe.
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+`workflow_dispatch` runs everything and attaches the artifacts to the run
+without publishing, for when you want to test the pipeline itself.
+
 Two traps are worth knowing if you edit `installer\blip.iss`:
 
 - **Braces end a Pascal comment.** `{ ... {app} ... }` terminates early and the
