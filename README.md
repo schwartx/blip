@@ -65,7 +65,7 @@ some-long-task; blip --exit-code $LASTEXITCODE "任务结束"
 
 ## HTTP
 
-Loopback only by default. `blip --config` writes a documented config file.
+Always on, loopback by default. `blip --config` writes a config file.
 
 ```bash
 # The one-liner that matters: anything that speaks HTTP can use this.
@@ -84,10 +84,10 @@ line becoming the headline and the rest the body. That fallback is deliberate �
 GitHub Actions, Grafana, Home Assistant, n8n and iOS Shortcuts all become
 zero-adaptation senders.
 
-**Exposing it to the LAN requires a token.** Set `bind = "0.0.0.0:7788"` and the
-daemon refuses to start unless `token` is non-empty, because a topmost window
-anyone on the network can push content into is a genuinely useful attack surface.
-Send it as `X-Token:` or `Authorization: Bearer`.
+**There is no authentication.** Loopback is therefore the only address that is
+safe to leave running unattended. Setting `bind = "0.0.0.0:7788"` lets every host
+that can reach the port put arbitrary content on a topmost window on your screen
+— fine on a trusted LAN or behind Tailscale, not on anything public.
 
 ---
 
@@ -173,8 +173,7 @@ working default; a malformed file falls back to defaults and reports itself as a
 critical notification rather than refusing to start.
 
 ```toml
-bind = "127.0.0.1:7788"
-token = ""
+bind = "127.0.0.1:7788"   # no auth — loopback is the only safe unattended value
 max_items = 50
 max_visible_rows = 5
 width = 340.0

@@ -20,18 +20,17 @@ use crate::model::{Command, NotifyRequest};
 
 const MAX_BODY: usize = 256 * 1024;
 
-pub fn serve(bind: &str, token: String, bridge: Bridge) -> Result<(), String> {
+pub fn serve(bind: &str, bridge: Bridge) -> Result<(), String> {
     let listener = TcpListener::bind(bind).map_err(|e| format!("bind {bind} failed: {e}"))?;
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
         let bridge = bridge.clone();
-        let token = token.clone();
         // Thread-per-connection: requests are tiny and short-lived, and this
         // keeps one hung client from stalling every other notification.
         std::thread::spawn(move || {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
             let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
-            handle(stream, &token, &bridge);
+            handle(stream, &bridge);
         });
     }
     Ok(())
@@ -40,20 +39,15 @@ pub fn serve(bind: &str, token: String, bridge: Bridge) -> Result<(), String> {
 struct Request {
     method: String,
     path: String,
-    token: Option<String>,
     content_type: String,
     body: Vec<u8>,
 }
 
-fn handle(mut stream: TcpStream, token: &str, bridge: &Bridge) {
+fn handle(mut stream: TcpStream, bridge: &Bridge) {
     let req = match parse(&mut stream) {
         Some(r) => r,
         None => return respond(&mut stream, 400, "bad request"),
     };
-
-    if !token.is_empty() && req.token.as_deref() != Some(token) {
-        return respond(&mut stream, 401, "unauthorized");
-    }
 
     let path = req.path.split('?').next().unwrap_or("").to_string();
 
@@ -132,7 +126,6 @@ fn parse(stream: &mut TcpStream) -> Option<Request> {
     let path = parts.next()?.to_string();
 
     let mut len = 0usize;
-    let mut token = None;
     let mut content_type = String::new();
 
     loop {
@@ -149,12 +142,6 @@ fn parse(stream: &mut TcpStream) -> Option<Request> {
         match k.as_str() {
             "content-length" => len = v.parse().unwrap_or(0),
             "content-type" => content_type = v.to_ascii_lowercase(),
-            // Accept either a dedicated header or a bearer token, so webhook
-            // senders that only expose Authorization still work.
-            "x-token" => token = Some(v.to_string()),
-            "authorization" => {
-                token = Some(v.strip_prefix("Bearer ").unwrap_or(v).to_string());
-            }
             _ => {}
         }
     }
@@ -167,14 +154,13 @@ fn parse(stream: &mut TcpStream) -> Option<Request> {
         reader.read_exact(&mut body).ok()?;
     }
 
-    Some(Request { method, path, token, content_type, body })
+    Some(Request { method, path, content_type, body })
 }
 
 fn respond(stream: &mut TcpStream, code: u16, msg: &str) {
     let reason = match code {
         200 => "OK",
         400 => "Bad Request",
-        401 => "Unauthorized",
         404 => "Not Found",
         _ => "Error",
     };

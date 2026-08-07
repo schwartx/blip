@@ -22,11 +22,6 @@ use blip::model::{Command, Level, NotifyRequest};
 fn main() {
     let (cfg, config_warning) = Config::load();
 
-    if let Err(e) = cfg.validate() {
-        fatal(&format!("blip: refusing to start\n\n{e}"));
-        return;
-    }
-
     // Claim the pipe before anything else. If another daemon holds it we are
     // the loser of a spawn race and should leave without a word.
     let pipe = match PipeServer::bind() {
@@ -43,12 +38,11 @@ fn main() {
         std::thread::spawn(move || pipe.serve(bridge));
     }
 
-    if cfg.http {
+    {
         let bind = cfg.bind.clone();
-        let token = cfg.token.clone();
         let bridge = bridge.clone();
         std::thread::spawn(move || {
-            if let Err(e) = http::serve(&bind, token, bridge.clone()) {
+            if let Err(e) = http::serve(&bind, bridge.clone()) {
                 // Report the failure through the panel itself. A tray app that
                 // silently isn't listening is the worst kind of broken.
                 bridge.send(Command::Notify(NotifyRequest {

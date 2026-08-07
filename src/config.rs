@@ -11,14 +11,12 @@ use crate::model::Level;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
-    /// Listen address for the HTTP transport. Loopback by default; binding to
-    /// anything else requires a non-empty `token` (enforced at startup).
+    /// Listen address for the HTTP transport, which is always on.
+    ///
+    /// There is no authentication. Loopback is therefore the only address that
+    /// is safe unattended — anything else lets every host that can reach it put
+    /// content on a topmost window on your screen.
     pub bind: String,
-    /// Shared secret checked against the `X-Token` header. Empty = no auth,
-    /// which is only permitted on loopback.
-    pub token: String,
-    /// Serve HTTP at all. The named pipe is always available regardless.
-    pub http: bool,
 
     /// Hard cap on retained rows. Oldest are evicted first.
     pub max_items: usize,
@@ -190,8 +188,6 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             bind: "127.0.0.1:7788".into(),
-            token: String::new(),
-            http: true,
             max_items: 50,
             max_visible_rows: 5,
             width: 340.0,
@@ -242,20 +238,6 @@ impl Config {
             .unwrap_or_else(|e| format!("# serialize failed: {e}\n"));
         std::fs::write(&path, text)?;
         Ok(path)
-    }
-
-    /// Refuse to expose the panel to the network without a shared secret.
-    pub fn validate(&self) -> Result<(), String> {
-        let loopback = self.bind.starts_with("127.") || self.bind.starts_with("localhost");
-        if !loopback && self.token.is_empty() {
-            return Err(format!(
-                "bind = \"{}\" is not loopback, so `token` must be set.\n\
-                 Anyone who can reach that address could otherwise push content \
-                 onto a topmost window on your screen.",
-                self.bind
-            ));
-        }
-        Ok(())
     }
 }
 
