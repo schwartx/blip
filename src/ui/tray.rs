@@ -101,18 +101,29 @@ impl Tray {
         // isn't turns "I clicked and nothing happened" into "I can see why".
         let show = wide(&format!("查看通知（{count}）"));
         let clear = wide(&format!("清空全部（{count}）"));
-        let reset = wide(if pinned { "取消钉住 · 回到光标模式" } else { "位置：跟随光标" });
+        // Unpinned, this is a statement of fact rather than an action, so it is
+        // greyed. The parenthetical is doing real work: drag-to-pin is an
+        // entirely invisible gesture, and a line that is already sitting here in
+        // grey is the only natural place to reveal it.
+        let reset = wide(if pinned {
+            "取消钉住 · 回到光标模式"
+        } else {
+            "位置：跟随光标（拖动面板可固定）"
+        });
         let config = wide("打开配置文件");
         let quit = wide("退出 blip");
 
-        // An empty list makes both of these no-ops; say so up front.
+        // The rule for this whole menu: if an item can't do anything in the
+        // current state, it must not be clickable. Finding that out by clicking
+        // is indistinguishable from a bug.
         let when_any = if count == 0 { MF_STRING | MF_GRAYED } else { MF_STRING };
+        let when_pinned = if pinned { MF_STRING } else { MF_STRING | MF_GRAYED };
 
         unsafe {
             let _ = AppendMenuW(menu, when_any, CMD_SHOW as usize, PCWSTR(show.as_ptr()));
             let _ = AppendMenuW(menu, when_any, CMD_CLEAR as usize, PCWSTR(clear.as_ptr()));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-            let _ = AppendMenuW(menu, MF_STRING, CMD_RESET as usize, PCWSTR(reset.as_ptr()));
+            let _ = AppendMenuW(menu, when_pinned, CMD_RESET as usize, PCWSTR(reset.as_ptr()));
             let _ = AppendMenuW(menu, MF_STRING, CMD_CONFIG as usize, PCWSTR(config.as_ptr()));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let _ = AppendMenuW(menu, MF_STRING, CMD_QUIT as usize, PCWSTR(quit.as_ptr()));
