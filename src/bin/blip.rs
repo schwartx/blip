@@ -43,6 +43,8 @@ COMMANDS:
         --dismiss <ID>       Withdraw a notification early.
         --clear              Clear the list and hide the panel.
         --show               Open the panel without adding anything.
+        --quit               Shut the daemon down. Never starts one, and exits
+                             0 if none was running.
         --config             Print the config path, creating a default if needed.
     -h, --help
     -V, --version
@@ -112,6 +114,7 @@ fn parse(args: &[String]) -> Result<Option<Command>, String> {
             }
 
             "--clear" => return Ok(Some(Command::Clear)),
+            "--quit" => return Ok(Some(Command::Quit)),
             "--show" => return Ok(Some(Command::Show)),
             "--dismiss" => {
                 return Ok(Some(Command::Dismiss { id: need(&mut i, "--dismiss")? }));
@@ -212,6 +215,14 @@ fn deliver(cmd: &Command) -> Result<(), String> {
         return Ok(());
     }
 
+    // The one command that must not auto-spawn. "Nothing was running" is the
+    // outcome `--quit` asked for, so it is success — an uninstaller calls this
+    // unconditionally and should not fail on a machine where blip was already
+    // stopped.
+    if matches!(cmd, Command::Quit) {
+        return Ok(());
+    }
+
     spawn_daemon()?;
     if !pipe::wait_ready(3000) {
         return Err("daemon did not come up within 3s".into());
@@ -232,9 +243,44 @@ fn spawn_daemon() -> Result<(), String> {
         return Err(format!("blipd.exe not found next to {}", exe.display()));
     }
 
+    // Detach our standard handles from the child before spawning.
+    //
+    // `Stdio::null()` alone is not enough, and the reason is a real Win32 trap:
+    // `CreateProcess` is called with `bInheritHandles = TRUE`, which hands the
+    // child *every* inheritable handle in this process — not just the three it
+    // was told about. So the daemon ends up holding a stray copy of whatever
+    // pipe our caller gave us, for its entire life.
+    //
+    // The symptom is nasty: `blip "x" | Out-Null` or `$(blip ...)` blocks
+    // forever, because the reader waits for an EOF that only arrives when the
+    // daemon exits — and only on the one invocation that happened to be the
+    // first, since later ones never spawn anything.
+    //
+    // Clearing HANDLE_FLAG_INHERIT affects inheritance only; our own writes to
+    // stdout below still work normally.
+    clear_std_handle_inheritance();
+
     std::process::Command::new(&daemon)
         .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| format!("could not start blipd: {e}"))?;
     Ok(())
+}
+
+fn clear_std_handle_inheritance() {
+    use windows::Win32::Foundation::{HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation};
+    use windows::Win32::System::Console::{
+        GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+
+    for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        if let Ok(h) = unsafe { GetStdHandle(which) }
+            && !h.is_invalid()
+        {
+            let _ = unsafe { SetHandleInformation(h, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0)) };
+        }
+    }
 }

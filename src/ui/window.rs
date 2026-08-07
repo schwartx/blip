@@ -340,6 +340,7 @@ impl Panel {
     fn drain_commands(&mut self) {
         let mut popped = false;
         let mut sound: Option<Level> = None;
+        let mut quit = false;
 
         while let Ok(cmd) = self.rx.try_recv() {
             match cmd {
@@ -360,7 +361,20 @@ impl Panel {
                 }
                 Command::Show => popped = true,
                 Command::Ping => {}
+                // Deferred rather than torn down here: `DestroyWindow` dispatches
+                // WM_DESTROY synchronously, which would re-enter the wndproc
+                // while we are still inside this loop holding `&mut self`.
+                Command::Quit => {
+                    quit = true;
+                    break;
+                }
             }
+        }
+
+        if quit {
+            self.quit = true;
+            let _ = unsafe { DestroyWindow(self.hwnd) };
+            return;
         }
 
         if let Some(level) = sound {

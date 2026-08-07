@@ -41,6 +41,7 @@ blip -t "部署失败" -b "3 个健康检查未通过" -l critical
 blip -t "编译中" --id build --progress 60          # updates in place
 blip --dismiss build                                # withdraw early
 blip --clear                                        # clear + hide
+blip --quit                                         # stop the daemon (never starts one)
 
 cargo test 2>&1 | blip --stdin -t "测试输出"
 some-long-task; blip --exit-code $LASTEXITCODE "任务结束"
@@ -195,13 +196,46 @@ idle_release = 90.0
 
 ## Autostart
 
-Optional — the CLI starts the daemon on demand. Task Scheduler beats the `Run`
-key because it supports a startup delay, which keeps you out of the login disk
-storm:
+Optional — the CLI starts the daemon on demand. Tick 「开机自动启动」 in the tray
+menu, or the matching checkbox in the installer; both write the same per-user
+`Run` value, and the daemon rewrites it at startup if it ever points at a stale
+path.
+
+Per-user `Run` rather than a service: a Windows service lives in session 0 and
+physically cannot draw on your desktop.
+
+If you want a startup delay to stay out of the login disk storm, use Task
+Scheduler instead and leave the tray toggle off:
 
 ```
 schtasks /create /tn "blip" /tr "\"C:\path\to\blipd.exe\"" /sc onlogon /delay 0000:30 /f
 ```
+
+---
+
+## Installer
+
+```powershell
+.\build-installer.ps1          # cargo build + test, then ISCC -> dist\blip-<ver>-setup.exe
+```
+
+Needs Inno Setup 6 (`scoop install extras/inno-setup`). The result is per-user
+and never prompts for elevation: binaries land in `%LOCALAPPDATA%\Programs\blip`,
+with optional checkboxes for PATH and autostart. Uninstall stops the daemon
+(politely, via `blip --quit`, so the tray icon goes with it), removes the PATH
+entry and the `Run` value, and leaves `%APPDATA%\blip` alone unless you say
+otherwise.
+
+Two traps are worth knowing if you edit `installer\blip.iss`:
+
+- **Braces end a Pascal comment.** `{ ... {app} ... }` terminates early and the
+  rest of your comment gets compiled as code.
+- **`Pos()` disagrees with `Copy()`/`Length()` on non-ASCII strings.** On a
+  machine whose user name is CJK, `Pos(';', S)` returned 40 for a semicolon
+  `Copy()` puts at 38 — off by the number of wide characters before it. A
+  hand-rolled `;`-splitter therefore reads every PATH segment shifted, matches
+  nothing, and can spin forever once `Pos` overshoots and returns 0. Both PATH
+  helpers avoid index arithmetic entirely for this reason.
 
 ---
 

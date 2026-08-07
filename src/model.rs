@@ -67,6 +67,12 @@ pub enum Command {
     Show,
     /// Liveness probe used by the CLI to decide whether to spawn the daemon.
     Ping,
+    /// Shut the daemon down cleanly, so the tray icon goes with it. Exists for
+    /// installers and uninstallers, which otherwise have to `taskkill /F` and
+    /// leave a ghost icon behind until the user happens to sweep the mouse
+    /// across the tray. Unlike every other command, this must never cause a
+    /// daemon to be spawned.
+    Quit,
 }
 
 // ---------------------------------------------------------------------------
