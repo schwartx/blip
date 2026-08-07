@@ -1,0 +1,15 @@
+{
+  "name": "blip",
+  "description": "The blip notification panel's companion plugin for Claude Code.",
+  "owner": {
+    "name": "schwartx",
+    "url": "https://github.com/schwartx"
+  },
+  "plugins": [
+    {
+      "name": "blip",
+      "source": "./plugin",
+      "description": "Show Claude Code's prompts in blip's panel — at the cursor, one row per session — instead of a corner toast you have to go looking for."
+    }
+  ]
+}

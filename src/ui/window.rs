@@ -355,7 +355,15 @@ impl Panel {
             match cmd {
                 Command::Notify(req) => {
                     let cfg = self.cfg.clone();
+                    // Evaluated here rather than in `store`, which is deliberately
+                    // free of Win32 so it can be tested without a desktop.
+                    let held = req.if_idle.is_some_and(|s| idle_secs() < s);
                     let a = self.store.push(req, &cfg);
+                    if held {
+                        // The row is in the list and the tray badge counts it.
+                        // Only the pop and the chime are withheld.
+                        continue;
+                    }
                     if a.pop && pop_level.is_none_or(|l| a.level.rank() > l.rank()) {
                         pop_level = Some(a.level);
                     }
@@ -959,16 +967,23 @@ fn max_surface(m: &Metrics) -> (f32, f32) {
     (m.width + m.pad * 2.0, h)
 }
 
-fn user_away() -> bool {
+/// Seconds since the last keyboard or mouse input, or `0.0` if Windows won't say
+/// — the answer that makes a caller treat the user as present, which is the
+/// direction that never suppresses anything.
+fn idle_secs() -> f32 {
     let mut lii = LASTINPUTINFO {
         cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
         dwTime: 0,
     };
     if unsafe { GetLastInputInfo(&mut lii) }.as_bool() {
-        unsafe { GetTickCount() }.wrapping_sub(lii.dwTime) > AWAY_MS
+        unsafe { GetTickCount() }.wrapping_sub(lii.dwTime) as f32 / 1000.0
     } else {
-        false
+        0.0
     }
+}
+
+fn user_away() -> bool {
+    idle_secs() > AWAY_MS as f32 / 1000.0
 }
 
 /// Smoothstep, so fades don't start and stop abruptly.

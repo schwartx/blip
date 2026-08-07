@@ -64,6 +64,15 @@ pub struct NotifyRequest {
     /// re-pop debounce so a progress stream doesn't keep yanking the panel open.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<u8>,
+    /// Only open the panel if the keyboard and mouse have been untouched for at
+    /// least this many seconds; otherwise land in the list silently.
+    ///
+    /// For events that fire whether or not you were watching — "the turn ended",
+    /// "the build finished". If you were sitting there, you already know, and a
+    /// panel that pops to tell you what you just read is a panel you learn to
+    /// resent. Nothing is dropped either way; only the popping is conditional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub if_idle: Option<f32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

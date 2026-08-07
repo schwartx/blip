@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "blip",
+  "displayName": "blip",
+  "version": "0.2.0",
+  "description": "Show Claude Code's prompts in blip's panel — at the cursor, one row per session — instead of a corner toast you have to go looking for.",
+  "author": {
+    "name": "schwartx",
+    "url": "https://github.com/schwartx"
+  },
+  "homepage": "https://github.com/schwartx/blip",
+  "repository": "https://github.com/schwartx/blip",
+  "license": "MIT",
+  "keywords": ["notification", "windows", "blip"]
+}

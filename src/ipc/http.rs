@@ -49,7 +49,10 @@ fn handle(mut stream: TcpStream, bridge: &Bridge) {
         None => return respond(&mut stream, 400, "bad request"),
     };
 
-    let path = req.path.split('?').next().unwrap_or("").to_string();
+    let (path, query) = match req.path.split_once('?') {
+        Some((p, q)) => (p.to_string(), q.to_string()),
+        None => (req.path.clone(), String::new()),
+    };
 
     match (req.method.as_str(), path.as_str()) {
         ("GET", "/health") => {
@@ -67,6 +70,28 @@ fn handle(mut stream: TcpStream, bridge: &Bridge) {
             }
             Err(e) => respond(&mut stream, 400, &e),
         },
+
+        // Claude Code's `http` hook handler posts here directly, with no script
+        // in between. See `ipc::hook`.
+        ("POST", "/hook/claude") => {
+            let level = param(&query, "level")
+                .and_then(|v| crate::model::Level::parse(&v))
+                .unwrap_or_default();
+            // Unparseable means "pop normally". A typo in a hook URL should not
+            // silently make a notification stop appearing.
+            let if_idle = param(&query, "if_idle").and_then(|v| v.parse::<f32>().ok());
+            match crate::ipc::hook::from_claude(&String::from_utf8_lossy(&req.body), level, if_idle) {
+                Ok(n) => {
+                    bridge.send(Command::Notify(n));
+                    // Empty body, not `{"ok":true}`: Claude Code parses a 2xx
+                    // JSON body as a hook *decision*, and an unknown-shaped
+                    // object there is asking for trouble. Empty means "fine,
+                    // nothing to say".
+                    respond_empty(&mut stream)
+                }
+                Err(e) => respond(&mut stream, 400, &e),
+            }
+        }
 
         ("DELETE", p) if p.starts_with("/notify/") => {
             let id = p.trim_start_matches("/notify/");
@@ -172,6 +197,22 @@ fn respond(stream: &mut TcpStream, code: u16, msg: &str) {
         msg.len()
     );
     let _ = stream.write_all(payload.as_bytes());
+}
+
+/// One query-string value, or `None`.
+///
+/// No percent-decoding: the only parameter read here is a level keyword, and a
+/// decoder that is never exercised is a decoder that is quietly wrong.
+fn param(query: &str, key: &str) -> Option<String> {
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| v.to_string())
+}
+
+fn respond_empty(stream: &mut TcpStream) {
+    let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
 }
 
 fn respond_json(stream: &mut TcpStream, code: u16, body: &str) {

@@ -1,0 +1,42 @@
+{
+  "description": "Route Claude Code's prompts to the blip notification panel",
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7788/hook/claude?level=critical",
+            "timeout": 5,
+            "statusMessage": "blip"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7788/hook/claude?level=normal&if_idle=15",
+            "timeout": 5,
+            "statusMessage": "blip"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7788/hook/claude?level=critical",
+            "timeout": 5,
+            "statusMessage": "blip"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -59,6 +59,7 @@ some-long-task; blip --exit-code $LASTEXITCODE "任务结束"
 | `--ttl <s>` | Override lifetime; `0` = never expires |
 | `--sticky` | `--ttl 0` |
 | `--progress 0-100` | Progress bar; suppresses re-popping |
+| `--if-idle <s>` | Only pop if you've been away that long; else land quietly |
 | `--action <cmd>` | Shell command run when the row is clicked |
 | `--stdin` | Read the body from stdin |
 
@@ -84,6 +85,41 @@ A body without `Content-Type: application/json` is taken as the title, first
 line becoming the headline and the rest the body. That fallback is deliberate —
 GitHub Actions, Grafana, Home Assistant, n8n and iOS Shortcuts all become
 zero-adaptation senders.
+
+### Claude Code
+
+`POST /hook/claude` reads [Claude Code](https://code.claude.com/docs/en/hooks)'s
+hook payload directly, so the companion plugin is a `hooks.json` and nothing
+else — no script, no interpreter, no `PATH` entry, and no process spawn on a
+hook that fires exactly when you're already waiting.
+
+```
+/plugin marketplace add schwartx/blip
+/plugin install blip@blip
+```
+
+Permission prompts arrive as `critical` and pop at once. A turn ending arrives
+as `normal` with `?if_idle=15`, which pops **only if you haven't touched the
+keyboard or mouse for 15 seconds** — otherwise the row lands in the list
+quietly. `Stop` fires whether or not you were watching, and a panel that
+interrupts you to report what you just read is how a notifier teaches you to
+ignore it. Nothing is dropped either way; only the popping is conditional.
+
+A turn killed by an API error — rate limit, overloaded server — is `StopFailure`,
+which arrives as `critical` with no `if_idle` at all. The "you already know"
+argument doesn't hold there: from the terminal, a dead turn looks much like a
+turn still thinking.
+
+The headline is the project directory — the only thing that tells two concurrent
+sessions apart — and `session_id` becomes the row id, so a session that asks
+three times updates one row instead of stacking three. `Stop` carries
+`last_assistant_message`, so the body is Claude's closing line.
+
+Both `level` and `if_idle` ride in the query string because they're properties
+of the *event*, not of the payload: the payload doesn't even say which matcher
+selected it. And `if_idle` can only be answered by whoever owns a window —
+`GetLastInputInfo` is not a question a hook script can usefully ask, which is
+the clearest case for the mapping living in `src/ipc/hook.rs`.
 
 **There is no authentication.** Loopback is therefore the only address that is
 safe to leave running unattended. Setting `bind = "0.0.0.0:7788"` lets every host
@@ -115,6 +151,13 @@ panel sitting there.
 the scrolled viewport, the pointer isn't resting on the panel, and you've used
 the keyboard or mouse in the last 30 seconds. Walk away mid-build and the result
 is still there when you come back.
+
+**Popping only when you're away.** `--if-idle <seconds>` collects a notification
+into the list without opening the panel unless the keyboard and mouse have been
+untouched that long. It's for events that fire whether or not you were
+watching — a turn ending, a build finishing. If you were sitting there you
+already know, and being interrupted to be told what you just read is what
+teaches you to ignore the next one.
 
 **Full-screen games and presentations.** While Windows reports a do-not-disturb
 state — exclusive-fullscreen D3D, presentation mode, Focus Assist busy — `low`
@@ -167,6 +210,7 @@ resizing a swapchain mid-animation flickers.
 | `src/config.rs` | TOML config with working defaults |
 | `src/ipc/pipe.rs` | Named pipe; also the single-instance lock |
 | `src/ipc/http.rs` | Hand-rolled HTTP, no async runtime |
+| `src/ipc/hook.rs` | Claude Code hook payload → notification |
 | `src/ui/layout.rs` | Geometry — shared by renderer and hit-tester |
 | `src/ui/render.rs` | D3D11 → composition swapchain → D2D → DComp |
 | `src/ui/window.rs` | Window, message loop, drag, hover, show/hide |
@@ -278,5 +322,8 @@ Two traps are worth knowing if you edit `installer\blip.iss`:
   it grows read/unread state and search it becomes the notification centre this
   was built to get away from.
 - `--source` is carried end to end but not yet used for grouping or muting.
+- A hook whose HTTP request fails is silent in headless runs, and the failure
+  path in the binary is a logger call rather than a UI surface. Not proven for
+  the interactive TUI: blip being stopped may or may not print a line there.
 - Panel can't cover exclusive-fullscreen D3D or the UAC secure desktop. Nothing
   can, without a signed `uiAccess` binary.

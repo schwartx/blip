@@ -34,6 +34,10 @@ OPTIONS:
         --sticky             Shorthand for --ttl 0.
         --progress <0-100>   Show a progress bar. Implies an in-flight task, so
                              repeated updates won't keep re-opening the panel.
+        --if-idle <SECONDS>  Only open the panel if the keyboard and mouse have
+                             been untouched this long; otherwise land in the
+                             list quietly. For results you may have watched
+                             arrive.
         --action <COMMAND>   Shell command run when the row is clicked.
         --stdin              Read the body from stdin.
         --exit-code <N>      Pick the level from a process exit code:
@@ -138,6 +142,11 @@ fn parse(args: &[String]) -> Result<Option<Command>, String> {
                 req.ttl = Some(v.parse().map_err(|_| format!("--ttl `{v}` is not a number"))?);
             }
             "--sticky" => req.ttl = Some(0.0),
+            "--if-idle" => {
+                let v = need(&mut i, "--if-idle")?;
+                req.if_idle =
+                    Some(v.parse().map_err(|_| format!("--if-idle `{v}` is not a number"))?);
+            }
             "--progress" => {
                 let v = need(&mut i, "--progress")?;
                 let n: u32 =

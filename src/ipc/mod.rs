@@ -1,6 +1,7 @@
 //! Transports. Every one of them funnels into the same `Command` channel, so
 //! the daemon has exactly one code path for "something arrived".
 
+pub mod hook;
 pub mod http;
 pub mod pipe;
 
