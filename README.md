@@ -1,25 +1,24 @@
 # blip
 
-A cursor-anchored, draggable, always-on-top notification panel for Windows.
+一个锚定在光标位置、可拖拽、始终置顶的 Windows 通知面板。
 
-Built because Windows toast — and therefore BurntToast — gets four things wrong
-for personal use:
+之所以做这个，是因为 Windows 系统通知（以及基于它的 BurntToast）在个人使用场景下有四个地方做得不对：
 
-| Toast does | blip does |
+| 系统通知的做法 | blip 的做法 |
 |---|---|
-| Always bottom-right | Appears where you're already looking (at the cursor); drag it once and it stays there |
-| Stacks a card per event | One list. Same `--id` updates a row in place; identical content collapses to `×N` |
-| Close ✕ is the most prominent control | Content is the focus; click a row to dismiss it; one big "都看过了" button clears everything |
-| Expires on wall-clock, even while you're away | A row's countdown only runs while it is actually on screen and unattended |
+| 永远出现在右下角 | 出现在你正在看的地方（光标附近）；拖动一次后就固定在那里 |
+| 每条通知堆一张卡片 | 只有一个列表。相同的 `--id` 会原地更新那一行；内容相同的通知会折叠成 `×N` |
+| 关闭按钮 ✕ 是最显眼的控件 | 内容才是重点；点击整行即可关闭；一个大大的「都看过了」按钮一键清空 |
+| 按挂钟时间过期，哪怕你不在电脑前 | 只有当这一行真的显示在屏幕上、且你没有操作时，倒计时才会走 |
 
 ```
 Rust · Win32 · DirectComposition · Direct2D · DirectWrite
-resident daemon + thin CLI + HTTP
+常驻守护进程 + 轻量 CLI + HTTP
 ```
 
 ---
 
-## Quick start
+## 快速开始
 
 ```bash
 cargo build --release
@@ -27,9 +26,7 @@ cargo build --release
 target/release/blip.exe "构建完成"
 ```
 
-That's it. The daemon isn't running yet, so the CLI starts it, waits for the
-pipe, and delivers — about 200ms cold, single-digit milliseconds after that.
-You never launch `blipd.exe` yourself.
+就这么简单。守护进程此时还没启动，CLI 会自动拉起它、等待管道就绪、再投递通知——冷启动大约 200ms，之后每次都是个位数毫秒。你不需要自己去启动 `blipd.exe`。
 
 ---
 
@@ -38,40 +35,39 @@ You never launch `blipd.exe` yourself.
 ```bash
 blip "构建完成"
 blip -t "部署失败" -b "3 个健康检查未通过" -l critical
-blip -t "编译中" --id build --progress 60          # updates in place
-blip --dismiss build                                # withdraw early
-blip --clear                                        # clear + hide
-blip --quit                                         # stop the daemon (never starts one)
+blip -t "编译中" --id build --progress 60          # 原地更新
+blip --dismiss build                                # 提前撤回
+blip --clear                                        # 清空并隐藏
+blip --quit                                         # 停止守护进程（不会顺带启动一个）
 
 cargo test 2>&1 | blip --stdin -t "测试输出"
 some-long-task; blip --exit-code $LASTEXITCODE "任务结束"
 ```
 
-`--exit-code` picks the level for you: `0` → normal, anything else → critical.
+`--exit-code` 会自动选择级别：`0` → normal，其他任何值 → critical。
 
-| Flag | Meaning |
+| 参数 | 含义 |
 |---|---|
-| `-t, --title` | Headline (also the first positional arg) |
-| `-b, --body` | Secondary line, wrapped and dimmed |
+| `-t, --title` | 标题（也可以作为第一个位置参数） |
+| `-b, --body` | 副标题，会自动换行并变暗显示 |
 | `-l, --level` | `low` / `normal` / `critical` |
-| `--id` | Same id replaces that row instead of adding one |
-| `-s, --source` | Origin tag |
-| `--ttl <s>` | Override lifetime; `0` = never expires |
-| `--sticky` | `--ttl 0` |
-| `--progress 0-100` | Progress bar; suppresses re-popping |
-| `--if-idle <s>` | Only pop if you've been away that long; else land quietly |
-| `--action <cmd>` | Shell command run when the row is clicked |
-| `--stdin` | Read the body from stdin |
+| `--id` | 相同 id 会替换该行，而不是新增一行 |
+| `-s, --source` | 来源标签 |
+| `--ttl <s>` | 覆盖生存时间；`0` = 永不过期 |
+| `--sticky` | 等价于 `--ttl 0` |
+| `--progress 0-100` | 进度条；同时会抑制重复弹出 |
+| `--if-idle <s>` | 只有在你离开超过这个时长后才弹出，否则悄悄进入列表 |
+| `--action <cmd>` | 点击该行时执行的 shell 命令 |
+| `--stdin` | 从标准输入读取正文 |
 
 ---
 
 ## HTTP
 
-Always on, and by default reachable from your network. `blip --config` writes a
-config file.
+始终开启，并且默认在你的局域网内可访问。`blip --config` 会写出一份配置文件。
 
 ```bash
-# The one-liner that matters: anything that speaks HTTP can use this.
+# 最重要的一行：任何会说 HTTP 的东西都能用这个。
 curl -d "构建完成" http://127.0.0.1:7788/notify
 
 curl -X POST http://127.0.0.1:7788/notify \
@@ -82,170 +78,103 @@ curl -X DELETE http://127.0.0.1:7788/notify/deploy
 curl http://127.0.0.1:7788/health
 ```
 
-A body without `Content-Type: application/json` is taken as the title, first
-line becoming the headline and the rest the body. That fallback is deliberate —
-GitHub Actions, Grafana, Home Assistant, n8n and iOS Shortcuts all become
-zero-adaptation senders.
+如果请求体没有带 `Content-Type: application/json`，就会被当作标题处理：第一行作为标题，其余作为正文。这个兜底逻辑是刻意设计的——这样 GitHub Actions、Grafana、Home Assistant、n8n 和 iOS 快捷指令都能零适配直接接入。
 
 ### Claude Code
 
-`POST /hook/claude` reads [Claude Code](https://code.claude.com/docs/en/hooks)'s
-hook payload directly, so the companion plugin is a `hooks.json` and nothing
-else — no script, no interpreter, no `PATH` entry, and no process spawn on a
-hook that fires exactly when you're already waiting.
+`POST /hook/claude` 直接读取 [Claude Code](https://code.claude.com/docs/en/hooks) 的 hook 载荷，因此配套插件只需要一份 `hooks.json`，别无其他——不需要脚本、不需要解释器、不需要配置 `PATH`，也不需要在恰好是你已经在等待的那个 hook 上额外启动一个进程。
 
 ```
 /plugin marketplace add schwartx/blip
 /plugin install blip@blip
 ```
 
-Permission prompts arrive as `critical` and pop at once. A turn ending arrives
-as `normal` with `?if_idle=15`, which pops **only if you haven't touched the
-keyboard or mouse for 15 seconds** — otherwise the row lands in the list
-quietly. `Stop` fires whether or not you were watching, and a panel that
-interrupts you to report what you just read is how a notifier teaches you to
-ignore it. Nothing is dropped either way; only the popping is conditional.
+权限确认请求会以 `critical` 级别立即弹出。一轮对话结束会以 `normal` 级别附带 `?if_idle=15` 送达，也就是**只有在你 15 秒内没有碰过键盘或鼠标时才会弹出**——否则这一行会悄悄进入列表。`Stop` 事件无论你是否在看都会触发，因为一个打断你、告诉你刚刚已经读过的内容的面板，恰恰是训练你去忽略它的方式。无论哪种情况，通知都不会丢失，只是弹出与否是有条件的。
 
-A turn killed by an API error — rate limit, overloaded server — is `StopFailure`,
-which arrives as `critical` with no `if_idle` at all. The "you already know"
-argument doesn't hold there: from the terminal, a dead turn looks much like a
-turn still thinking.
+因 API 错误（限流、服务过载）而中断的一轮对话会触发 `StopFailure`，它以 `critical` 级别送达，且不带任何 `if_idle`。「你已经知道了」这个理由在这里不成立：单看终端，一轮已经挂掉的对话和一轮还在思考的对话看起来几乎一样。
 
-The headline is the project directory — the only thing that tells two concurrent
-sessions apart — and `session_id` becomes the row id, so a session that asks
-three times updates one row instead of stacking three. `Stop` carries
-`last_assistant_message`, so the body is Claude's closing line.
+标题是项目目录——这是唯一能区分两个并发会话的信息——而 `session_id` 会被用作这一行的 id，因此同一个会话连续询问三次也只会更新同一行，而不是堆成三行。`Stop` 事件会携带 `last_assistant_message`，所以正文就是 Claude 的结束语。
 
-Both `level` and `if_idle` ride in the query string because they're properties
-of the *event*, not of the payload: the payload doesn't even say which matcher
-selected it. And `if_idle` can only be answered by whoever owns a window —
-`GetLastInputInfo` is not a question a hook script can usefully ask, which is
-the clearest case for the mapping living in `src/ipc/hook.rs`.
+`level` 和 `if_idle` 都放在查询字符串里，因为它们是*事件*本身的属性，而不是载荷的属性：载荷里甚至不会说明是哪条匹配规则选中了它。而且 `if_idle` 只有拥有窗口的一方才能回答——`GetLastInputInfo` 不是 hook 脚本能自己回答的问题，这也是这层映射逻辑放在 `src/ipc/hook.rs` 里最清楚的理由。
 
-**There is no authentication, and `bind` defaults to `0.0.0.0:7788`.** That is
-the point of the HTTP transport — a build box, a NAS, or a Claude Code session
-on your other machine reaches the panel without anyone editing a file first —
-but the consequence is real: every host that can reach the port can put
-arbitrary content on a topmost window on your screen. Fine on a home network or
-behind Tailscale. On a network you don't control, set `bind = "127.0.0.1:7788"`.
+**没有任何身份验证，且 `bind` 默认是 `0.0.0.0:7788`。** 这正是 HTTP 传输方式存在的意义——一台构建机、一台 NAS，或者你另一台机器上的 Claude Code 会话，不需要任何人先去改配置文件，就能直接连到这个面板——但代价也是实实在在的：任何能连到这个端口的主机，都能在你屏幕上的置顶窗口里显示任意内容。在家庭网络或 Tailscale 之类的环境下没有问题。如果是在你不完全信任的网络上，请把 `bind` 设为 `"127.0.0.1:7788"`。
 
-Windows will ask to allow the port through the firewall the first time. Answering
-"private networks only" is the setting that matches the above.
+Windows 首次运行时会询问是否允许该端口通过防火墙。选择「仅限专用网络」即与上述设定相符。
 
 ---
 
-## Behaviour
+## 行为细节
 
-**Position.** The panel opens near the cursor — the only place on screen you're
-guaranteed to already be looking. It flips at screen edges like a context menu,
-clamps to the work area (never under the taskbar), and is per-monitor DPI aware.
-It will never open on top of the cursor hotspot, because a window that
-materialises under the pointer eats the click you were about to make.
+**位置。** 面板会在光标附近打开——这是屏幕上唯一能保证你正在看的地方。它会像右键菜单一样在屏幕边缘自动翻转方向，被限制在工作区内（绝不会挡在任务栏下面），并且支持多显示器下的按屏 DPI 感知。它永远不会正好出现在光标热点正下方，因为一个刚好在指针下方冒出来的窗口，会吃掉你原本准备点下去的那次点击。
 
-**Drag to pin.** Dragging is the user saying "put it here", so it's also the
-gesture that stops the panel following the cursor. Tray → double-click resets to
-cursor mode. No setting to find.
+**拖拽即固定。** 拖拽这个动作本身就是在说「放这里」，所以它也是让面板停止跟随光标的手势。托盘图标 → 双击即可重置回跟随光标模式。不需要专门找一个设置项。
 
-**Dismissing.** Click anywhere on a row to dismiss it, running its `--action`
-first if it has one. There is no per-row ✕ — a small glyph doing what the whole
-row already does is just a smaller target for the same result, which is the
-affordance this panel exists to get away from. The footer button clears
-everything and hides in one go; clearing without hiding would leave an empty
-panel sitting there.
+**关闭通知。** 点击一行的任意位置即可关闭它，如果该行绑定了 `--action`，会先执行它。这里没有每行专属的 ✕ 按钮——一个只是缩小版、功能却和整行点击完全一样的小图标，只会让同样的操作变成一个更小的点击目标，而这恰恰是这个面板想要摆脱的交互方式。底部的按钮会一次性清空所有通知并隐藏面板；只清空不隐藏的话，会留下一个空面板杵在那里。
 
-**Expiry.** A row counts down only when the panel is visible, the row is inside
-the scrolled viewport, the pointer isn't resting on the panel, and you've used
-the keyboard or mouse in the last 30 seconds. Walk away mid-build and the result
-is still there when you come back.
+**过期。** 只有当面板可见、该行处于滚动可视区域内、指针没有停留在面板上、并且你在过去 30 秒内使用过键盘或鼠标时，这一行的倒计时才会走。哪怕你在构建过程中离开，回来时结果依然还在。
 
-**Popping only when you're away.** `--if-idle <seconds>` collects a notification
-into the list without opening the panel unless the keyboard and mouse have been
-untouched that long. It's for events that fire whether or not you were
-watching — a turn ending, a build finishing. If you were sitting there you
-already know, and being interrupted to be told what you just read is what
-teaches you to ignore the next one.
+**只在你不在时弹出。** `--if-idle <seconds>` 会让一条通知先进入列表，但不打开面板，除非键盘和鼠标已经这么长时间没有被触碰。这适用于那些无论你在不在都会触发的事件——比如一轮对话结束、一次构建完成。如果你当时就坐在那里，你已经知道结果了；被打断去被告知你刚刚已经看到的内容，正是训练你去忽略下一次通知的方式。
 
-**Full-screen games and presentations.** While Windows reports a do-not-disturb
-state — exclusive-fullscreen D3D, presentation mode, Focus Assist busy — `low`
-and `normal` notifications are collected silently instead of opening the panel,
-and the panel opens by itself once the state ends. Nothing is lost in the
-meantime: a hidden panel doesn't count TTL down, so they sit untouched rather
-than expiring behind the game. `critical` still breaks through, because an alert
-you only see three hours later isn't an alert. Turn the whole thing off with
-`respect_quiet_hours = false`.
+**全屏游戏与演示模式。** 当 Windows 报告处于免打扰状态时——独占全屏 D3D、演示模式、专注助手忙碌——`low` 和 `normal` 级别的通知会被静默收进列表而不打开面板，等这个状态结束后面板会自动打开。这期间不会丢失任何东西：隐藏状态下的面板不会计算 TTL 倒计时，所以它们只是静静等待，而不会在游戏背后悄悄过期。`critical` 级别依然会强制弹出，因为一条三小时后才看到的警报根本算不上警报。可以通过 `respect_quiet_hours = false` 完全关闭这套逻辑。
 
-**Focus.** The panel is `WS_EX_NOACTIVATE` — it can appear while you're typing
-and you won't lose a keystroke or drop an IME composition. Esc is registered as a
-hotkey *only while the pointer is over the panel*, so it never steals Esc from
-the app you're actually working in.
+**焦点。** 面板使用 `WS_EX_NOACTIVATE`——它可以在你打字的时候出现，而不会吃掉你的一个按键，也不会打断输入法的组字过程。Esc 只在指针停留在面板上时才会被注册为热键，因此它绝不会从你正在使用的应用里抢走 Esc 键。
 
-**Idle.** After 90 seconds with nothing to show, the D3D/D2D/DComp stack is
-released and the working set collapses. The process, the pipe and the HTTP
-listener stay up; the next notification pays a one-off rebuild instead of every
-notification paying a process spawn.
+**空闲。** 90 秒没有任何内容需要显示后，D3D/D2D/DComp 这套渲染栈会被释放，工作集随之收缩。进程本身、管道和 HTTP 监听器都保持运行；下一条通知只需要承担一次性的重建开销，而不是每条通知都要付出启动一个进程的代价。
 
 ---
 
-## Architecture
+## 架构
 
 ```
-blip.exe   (console)   parse args → named pipe → exit          ~8ms
-                              │ spawns if absent
-blipd.exe  (windows)   ┌──────┴─────────────────────────┐
-                       │ pipe thread ─┐                 │
-                       │ http thread ─┼→ mpsc → PostMessage
+blip.exe   (控制台程序)   解析参数 → 命名管道 → 退出          约 8ms
+                              │ 若守护进程不存在则拉起
+blipd.exe  (窗口程序)   ┌──────┴─────────────────────────┐
+                       │ 管道线程 ─┐                     │
+                       │ HTTP 线程 ─┼→ mpsc → PostMessage
                        │              │                 │
-                       │       message loop ── store ── layout ── D2D/DComp
+                       │       消息循环 ── 状态存储 ── 布局 ── D2D/DComp
                        └────────────────────────────────┘
 ```
 
-Three transports, one `Command` type, one policy engine.
+三种传输方式，一个统一的 `Command` 类型，一套策略引擎。
 
-**Why not a Windows service:** services run in Session 0 and are physically
-unable to draw on the user's desktop. Anything that shows UI has to be a
-per-session process.
+**为什么不用 Windows 服务：** 服务运行在 Session 0 中，物理上就无法在用户桌面上绘制内容。任何要显示界面的东西都必须是运行在用户会话内的进程。
 
-**Why the swapchain is fixed-size:** it's allocated once at the panel's maximum
-extent. Content changes move the *window*, and DComp clips the surface to it —
-resizing a swapchain mid-animation flickers.
+**为什么交换链是固定大小的：** 它在面板可能达到的最大尺寸下一次性分配完成。内容变化时移动的是*窗口*本身，DComp 会把渲染表面裁剪到窗口大小——如果在动画过程中调整交换链尺寸会导致画面闪烁。
 
-| File | |
+| 文件 | |
 |---|---|
-| `src/model.rs` | Wire protocol + runtime notification |
-| `src/store.rs` | List, same-id update, TTL state machine |
-| `src/config.rs` | TOML config with working defaults |
-| `src/ipc/pipe.rs` | Named pipe; also the single-instance lock |
-| `src/ipc/http.rs` | Hand-rolled HTTP, no async runtime |
-| `src/ipc/hook.rs` | Claude Code hook payload → notification |
-| `src/ui/layout.rs` | Geometry — shared by renderer and hit-tester |
+| `src/model.rs` | 线路协议 + 运行时通知对象 |
+| `src/store.rs` | 列表、同 id 更新、TTL 状态机 |
+| `src/config.rs` | TOML 配置，带有可直接使用的默认值 |
+| `src/ipc/pipe.rs` | 命名管道；同时也是单实例锁 |
+| `src/ipc/http.rs` | 手写的 HTTP 实现，不依赖异步运行时 |
+| `src/ipc/hook.rs` | Claude Code hook 载荷 → 通知对象 |
+| `src/ui/layout.rs` | 几何布局逻辑——渲染器和命中测试共用 |
 | `src/ui/render.rs` | D3D11 → composition swapchain → D2D → DComp |
-| `src/ui/window.rs` | Window, message loop, drag, hover, show/hide |
-| `src/ui/position.rs` | Cursor anchor, multi-monitor DPI, edge flip |
+| `src/ui/window.rs` | 窗口、消息循环、拖拽、悬停、显示/隐藏 |
+| `src/ui/position.rs` | 光标锚定、多显示器 DPI、边缘翻转 |
 
-Logic that can be tested without a GPU, is: `cargo test` covers the TTL pause
-rules, id collapsing, eviction, edge flipping, cursor avoidance, and the
-invariant that the hit-tester agrees with what was drawn.
+不依赖 GPU 就能测试的逻辑都已覆盖：`cargo test` 覆盖了 TTL 暂停规则、id 折叠、淘汰逻辑、边缘翻转、光标避让，以及「命中测试结果与实际绘制内容一致」这一不变量。
 
 ---
 
-## Config
+## 配置
 
-`%APPDATA%\blip\config.toml`, created by `blip --config`. Every field has a
-working default; a malformed file falls back to defaults and reports itself as a
-critical notification rather than refusing to start.
+`%APPDATA%\blip\config.toml`，由 `blip --config` 创建。每个字段都有可直接使用的默认值；配置文件格式错误时会回退到默认值，并以 critical 通知的形式提示自己出了问题，而不是拒绝启动。
 
 ```toml
-bind = "0.0.0.0:7788"     # no auth — see the warning under HTTP
+bind = "0.0.0.0:7788"     # 无身份验证——参见上文 HTTP 部分的警告
 max_items = 50
-max_visible_rows = 10     # panel grows to this many rows, then scrolls
+max_visible_rows = 10     # 面板最多长到这么多行，之后开始滚动
 width = 340.0
 font = "Microsoft YaHei UI"
 
 [levels]
 low_ttl = 4.0
 normal_ttl = 7.0
-critical_ttl = 0.0     # 0 = never expires
-low_pops = false       # low lands in the list without opening the panel
+critical_ttl = 0.0     # 0 = 永不过期
+low_pops = false       # low 级别只进列表，不会自动弹出面板
 
 [behavior]
 cursor_gap = 18.0
@@ -255,18 +184,13 @@ idle_release = 90.0
 
 ---
 
-## Autostart
+## 开机自启
 
-Optional — the CLI starts the daemon on demand. Tick 「开机自动启动」 in the tray
-menu, or the matching checkbox in the installer; both write the same per-user
-`Run` value, and the daemon rewrites it at startup if it ever points at a stale
-path.
+可选项——CLI 会按需拉起守护进程。可以在托盘菜单里勾选「开机自动启动」，或者在安装程序里勾选对应的复选框；两者写入的是同一个按用户级别的 `Run` 键值，如果这个值指向了一个失效的路径，守护进程在启动时会自动重写它。
 
-Per-user `Run` rather than a service: a Windows service lives in session 0 and
-physically cannot draw on your desktop.
+之所以用按用户的 `Run` 而不是服务：Windows 服务运行在 Session 0 中，物理上无法在你的桌面上绘制内容。
 
-If you want a startup delay to stay out of the login disk storm, use Task
-Scheduler instead and leave the tray toggle off:
+如果你想设置一个开机延迟、避免在登录时的磁盘 I/O 高峰凑热闹，可以改用任务计划程序，并把托盘里的开关保持关闭：
 
 ```
 schtasks /create /tn "blip" /tr "\"C:\path\to\blipd.exe\"" /sc onlogon /delay 0000:30 /f
@@ -274,62 +198,38 @@ schtasks /create /tn "blip" /tr "\"C:\path\to\blipd.exe\"" /sc onlogon /delay 00
 
 ---
 
-## Installer
+## 安装程序
 
 ```powershell
-.\build-installer.ps1          # cargo build + test, then ISCC -> dist\blip-<ver>-setup.exe
+.\build-installer.ps1          # cargo build + test，然后用 ISCC 生成 dist\blip-<ver>-setup.exe
 ```
 
-Needs Inno Setup 6 (`scoop install extras/inno-setup`). The result is per-user
-and never prompts for elevation: binaries land in `%LOCALAPPDATA%\Programs\blip`,
-with optional checkboxes for PATH and autostart. Uninstall stops the daemon
-(politely, via `blip --quit`, so the tray icon goes with it), removes the PATH
-entry and the `Run` value, and leaves `%APPDATA%\blip` alone unless you say
-otherwise.
+需要 Inno Setup 6（`scoop install extras/inno-setup`）。生成的安装程序是按用户安装的，全程不会弹出提权提示：二进制文件会放到 `%LOCALAPPDATA%\Programs\blip`，并带有 PATH 和开机自启的可选复选框。卸载时会（礼貌地）通过 `blip --quit` 停止守护进程，让托盘图标随之消失，同时移除 PATH 条目和 `Run` 键值，`%APPDATA%\blip` 目录默认会保留，除非你另外指定。
 
-### Releasing
+### 发布流程
 
-Push a tag and `.github/workflows/release.yml` does the rest — tests, clippy,
-the installer, a portable zip, SHA-256 sums, and a GitHub Release:
+推送一个 tag，`.github/workflows/release.yml` 会完成剩下的一切——测试、clippy 检查、生成安装程序、打包便携版 zip、生成 SHA-256 校验和，并创建一个 GitHub Release：
 
 ```bash
-# Cargo.toml's version must already match; the workflow fails loudly if not,
-# because otherwise a v0.2.0 tag publishes blip-0.1.0-setup.exe.
+# Cargo.toml 里的版本号必须已经和 tag 一致；否则工作流会直接失败，
+# 因为不然的话，一个 v0.2.0 的 tag 就会发布出 blip-0.1.0-setup.exe。
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-`workflow_dispatch` runs everything and attaches the artifacts to the run
-without publishing, for when you want to test the pipeline itself.
+`workflow_dispatch` 会跑完整套流程并把产物附加到本次运行上，但不会真正发布，适合用来单独测试这条流水线本身。
 
-Two traps are worth knowing if you edit `installer\blip.iss`:
+修改 `installer\blip.iss` 时有两个坑值得注意：
 
-- **Braces end a Pascal comment.** `{ ... {app} ... }` terminates early and the
-  rest of your comment gets compiled as code.
-- **`Pos()` disagrees with `Copy()`/`Length()` on non-ASCII strings.** On a
-  machine whose user name is CJK, `Pos(';', S)` returned 40 for a semicolon
-  `Copy()` puts at 38 — off by the number of wide characters before it. A
-  hand-rolled `;`-splitter therefore reads every PATH segment shifted, matches
-  nothing, and can spin forever once `Pos` overshoots and returns 0. Both PATH
-  helpers avoid index arithmetic entirely for this reason.
+- **花括号会提前结束 Pascal 注释。** `{ ... {app} ... }` 会提前终止注释，导致注释里剩下的部分被当作代码编译。
+- **`Pos()` 和 `Copy()`/`Length()` 在处理非 ASCII 字符串时结果不一致。** 在用户名是中日韩字符的机器上，`Pos(';', S)` 返回的是 40，而 `Copy()` 认为分号在第 38 位——差值正好是它前面宽字符的个数。因此手写的按 `;` 分割逻辑，每一段 PATH 都会读错位、匹配不到任何内容，一旦 `Pos` 越界返回 0 甚至可能死循环。出于这个原因，两个 PATH 相关的辅助函数都完全避开了基于下标的字符串运算。
 
 ---
 
-## Known gaps
+## 已知局限
 
-- Rows scroll but there's no inertia.
-- Windows offers no way to enter a do-not-disturb state on demand, so the
-  quiet-hours path is exercised through a substituted source: set
-  `BLIP_QUIET_FILE` to a path and the daemon treats "that file exists" as
-  "Windows says stay quiet". Unset in normal use. One 120s run of that harness
-  failed to release and was never reproduced across later runs — most likely a
-  transient false from the file poll, which the real API doesn't do, but it is
-  not proven.
-- No history panel; cleared is cleared. That boundary is deliberate — the moment
-  it grows read/unread state and search it becomes the notification centre this
-  was built to get away from.
-- `--source` is carried end to end but not yet used for grouping or muting.
-- A hook whose HTTP request fails is silent in headless runs, and the failure
-  path in the binary is a logger call rather than a UI surface. Not proven for
-  the interactive TUI: blip being stopped may or may not print a line there.
-- Panel can't cover exclusive-fullscreen D3D or the UAC secure desktop. Nothing
-  can, without a signed `uiAccess` binary.
+- 列表可以滚动，但没有惯性效果。
+- Windows 没有提供按需进入免打扰状态的方式，因此「免打扰」这条路径是通过一个替代信号来测试的：把 `BLIP_QUIET_FILE` 设为某个路径后，守护进程会把「这个文件存在」当作「Windows 说现在要保持安静」。正常使用时不要设置这个变量。曾经有一次 120 秒的测试运行未能正确释放该状态，且之后没能再复现——最可能的原因是文件轮询产生的瞬时误判，真实 API 不会有这种情况，但这一点尚未被证实。
+- 没有历史记录面板；清空了就是清空了。这个边界是刻意设定的——一旦它长出已读/未读状态和搜索功能，它就变成了这个项目最初想要摆脱的那种通知中心。
+- `--source` 已经端到端贯通，但目前还没有被用于分组或静音。
+- 在无人值守（headless）运行时，hook 的 HTTP 请求失败是静默的，二进制程序里对应的失败路径只是一条日志记录，而不是界面上的提示。在交互式 TUI 中的情况尚未验证：blip 被停止时那里是否会打印一行提示，目前不确定。
+- 面板无法覆盖独占全屏的 D3D 内容，也无法覆盖 UAC 安全桌面。没有经过签名的 `uiAccess` 二进制程序，任何软件都做不到这一点。
