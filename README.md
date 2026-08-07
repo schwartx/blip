@@ -104,15 +104,26 @@ materialises under the pointer eats the click you were about to make.
 gesture that stops the panel following the cursor. Tray → double-click resets to
 cursor mode. No setting to find.
 
-**Dismissing.** Click anywhere on a row to dismiss it (running its `--action`
-first, if it has one). The per-row ✕ appears on hover and drops the row *without*
-firing its action. The footer button clears everything and hides in one go —
-clearing without hiding would just leave an empty panel sitting there.
+**Dismissing.** Click anywhere on a row to dismiss it, running its `--action`
+first if it has one. There is no per-row ✕ — a small glyph doing what the whole
+row already does is just a smaller target for the same result, which is the
+affordance this panel exists to get away from. The footer button clears
+everything and hides in one go; clearing without hiding would leave an empty
+panel sitting there.
 
 **Expiry.** A row counts down only when the panel is visible, the row is inside
 the scrolled viewport, the pointer isn't resting on the panel, and you've used
 the keyboard or mouse in the last 30 seconds. Walk away mid-build and the result
 is still there when you come back.
+
+**Full-screen games and presentations.** While Windows reports a do-not-disturb
+state — exclusive-fullscreen D3D, presentation mode, Focus Assist busy — `low`
+and `normal` notifications are collected silently instead of opening the panel,
+and the panel opens by itself once the state ends. Nothing is lost in the
+meantime: a hidden panel doesn't count TTL down, so they sit untouched rather
+than expiring behind the game. `critical` still breaks through, because an alert
+you only see three hours later isn't an alert. Turn the whole thing off with
+`respect_quiet_hours = false`.
 
 **Focus.** The panel is `WS_EX_NOACTIVATE` — it can appear while you're typing
 and you won't lose a keystroke or drop an IME composition. Esc is registered as a
@@ -242,6 +253,13 @@ Two traps are worth knowing if you edit `installer\blip.iss`:
 ## Known gaps
 
 - Rows scroll but there's no inertia.
+- Windows offers no way to enter a do-not-disturb state on demand, so the
+  quiet-hours path is exercised through a substituted source: set
+  `BLIP_QUIET_FILE` to a path and the daemon treats "that file exists" as
+  "Windows says stay quiet". Unset in normal use. One 120s run of that harness
+  failed to release and was never reproduced across later runs — most likely a
+  transient false from the file poll, which the real API doesn't do, but it is
+  not proven.
 - No history panel; cleared is cleared. That boundary is deliberate — the moment
   it grows read/unread state and search it becomes the notification centre this
   was built to get away from.

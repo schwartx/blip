@@ -106,6 +106,10 @@ pub struct Panel {
     last_tick: Instant,
     idle: f32,
     quit: bool,
+    /// Something arrived while Windows said the user was gaming or presenting,
+    /// so the panel stayed shut. Keeps the slow timer alive until the quiet
+    /// window ends — otherwise nothing is left running to notice that it did.
+    deferred_pop: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +162,7 @@ pub fn run(cfg: Config, rx: Receiver<Command>, wake: Arc<AtomicIsize>, _pipe: Ar
         last_tick: Instant::now(),
         idle: 0.0,
         quit: false,
+        deferred_pop: false,
     });
     let raw = Box::into_raw(panel);
 
@@ -338,7 +343,11 @@ impl Panel {
     // -- IPC ---------------------------------------------------------------
 
     fn drain_commands(&mut self) {
-        let mut popped = false;
+        // Kept apart on purpose. `forced` is the user asking to see the panel,
+        // which is always honoured; `pop_level` is a notification asking for
+        // attention, which a full-screen game gets a say in.
+        let mut forced = false;
+        let mut pop_level: Option<Level> = None;
         let mut sound: Option<Level> = None;
         let mut quit = false;
 
@@ -347,8 +356,8 @@ impl Panel {
                 Command::Notify(req) => {
                     let cfg = self.cfg.clone();
                     let a = self.store.push(req, &cfg);
-                    if a.pop {
-                        popped = true;
+                    if a.pop && pop_level.is_none_or(|l| a.level.rank() > l.rank()) {
+                        pop_level = Some(a.level);
                     }
                     if a.sound {
                         sound = Some(a.level);
@@ -357,9 +366,10 @@ impl Panel {
                 Command::Dismiss { id } => self.store.dismiss_id(&id),
                 Command::Clear => {
                     self.store.clear();
+                    self.deferred_pop = false;
                     self.begin_hide();
                 }
-                Command::Show => popped = true,
+                Command::Show => forced = true,
                 Command::Ping => {}
                 // Deferred rather than torn down here: `DestroyWindow` dispatches
                 // WM_DESTROY synchronously, which would re-enter the wndproc
@@ -380,11 +390,55 @@ impl Panel {
         if let Some(level) = sound {
             self.audio.play(level);
         }
-        if popped {
+
+        if forced {
             self.show();
+        } else if let Some(level) = pop_level {
+            // Critical still breaks through. That is what the level means —
+            // it also never expires on its own — and a build failure you only
+            // learn about three hours later is not a notification.
+            if level == Level::Critical || !self.quiet_now() {
+                self.show();
+            } else {
+                // Collected, not shown. Nothing is lost by waiting: a hidden
+                // panel doesn't count TTL down, so these sit untouched until
+                // the game ends rather than quietly expiring behind it.
+                self.defer_pop();
+            }
         }
+
         self.refresh_tray();
         self.request_frame();
+    }
+
+    /// Windows reports the user as gaming full-screen, presenting, or otherwise
+    /// mid-something they don't want covered.
+    fn quiet_now(&self) -> bool {
+        self.cfg.respect_quiet_hours && crate::ui::audio::should_stay_quiet()
+    }
+
+    fn defer_pop(&mut self) {
+        self.deferred_pop = true;
+        // The slow timer may already have been killed after the GPU release, so
+        // restart it — it is the only thing that will notice the game exiting.
+        unsafe { SetTimer(Some(self.hwnd), TIMER_IDLE, 2000, None) };
+    }
+
+    /// Called from the slow timer. Polled rather than event-driven because
+    /// Windows has no notification for `SHQueryUserNotificationState` changing,
+    /// and 2s is both far below human patience and far above any cost worth
+    /// counting.
+    fn quiet_check(&mut self) {
+        if !self.deferred_pop || self.quiet_now() {
+            return;
+        }
+        self.deferred_pop = false;
+        if self.store.live_count() > 0 {
+            // Deliberately silent. The chime was suppressed when it would have
+            // been useful; replaying it now, minutes late, only startles.
+            self.show();
+            self.refresh_tray();
+        }
     }
 
     /// Post a notification about blip itself.
@@ -418,6 +472,8 @@ impl Panel {
         if self.renderer.is_none() && self.build_renderer().is_err() {
             return;
         }
+        // Whatever was waiting is on screen now, by whatever route.
+        self.deferred_pop = false;
 
         // Capture the cursor position once, here. Reading it every frame would
         // make the panel chase the mouse around the screen.
@@ -601,10 +657,9 @@ impl Panel {
         }
         let Some(r) = self.renderer.as_mut() else { return };
 
-        let (hover_row, hover_close) = match self.hit {
-            Hit::Row(i, _) => (Some(i), false),
-            Hit::RowClose(i, _) => (Some(i), true),
-            _ => (None, false),
+        let hover_row = match self.hit {
+            Hit::Row(i, _) => Some(i),
+            _ => None,
         };
 
         let frame = Frame {
@@ -612,7 +667,6 @@ impl Panel {
             items: &self.store.items,
             scroll: self.scroll,
             hover_row,
-            hover_close,
             hover_button: matches!(self.hit, Hit::DismissAll),
             alpha: ease(self.alpha),
             count: self.store.len(),
@@ -631,6 +685,8 @@ impl Panel {
 
     fn idle_check(&mut self) {
         self.idle += 2.0;
+        self.quiet_check();
+
         if self.idle >= self.cfg.behavior.idle_release && self.renderer.is_some() {
             // Give the GPU stack back. The process, the pipe and the HTTP
             // listener stay up; the next notification pays a one-off rebuild
@@ -645,7 +701,13 @@ impl Panel {
             unsafe {
                 let _ = SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
             }
+        }
 
+        // Stop ticking only once there is genuinely nothing left to watch for:
+        // no GPU state still to hand back, and nobody waiting on a game to end.
+        // Killing it while a pop is deferred would strand those notifications
+        // in the list with nothing running to release them.
+        if self.renderer.is_none() && !self.deferred_pop {
             let _ = unsafe { KillTimer(Some(self.hwnd), TIMER_IDLE) };
         }
     }
@@ -790,15 +852,11 @@ impl Panel {
                 self.begin_hide();
                 self.refresh_tray();
             }
-            Hit::RowClose(_, key) => {
-                self.store.dismiss_key(key);
-                self.refresh_tray();
-            }
             // Clicking a row dismisses it, running its action first if it has
-            // one. Anywhere on the row works, which is the point: getting rid of
-            // something you've read should never require aiming at a small
-            // glyph. The ✕ stays for the case where you want to drop a row
-            // *without* firing its action.
+            // one. Anywhere on the row works, and there is no ✕ anywhere:
+            // a small glyph that does what the whole row already does is a
+            // smaller target for the same result, which is precisely the
+            // affordance this panel exists to get away from.
             Hit::Row(idx, key) => {
                 if let Some(cmd) = self.store.items.get(idx).and_then(|n| n.action.clone()) {
                     run_action(&cmd);

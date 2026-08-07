@@ -19,12 +19,27 @@ use crate::wide;
 
 /// True when the machine is in a state where interrupting would be rude:
 /// presenting, playing a full-screen game, or inside a Focus Assist quiet
-/// window. The panel still records the notification — it just stays silent.
+/// window.
+///
+/// Gates both the chime and — for everything below `critical` — the panel
+/// opening at all. The notification is still recorded either way; see
+/// `window::quiet_check` for how it gets released afterwards.
 ///
 /// `QUNS_QUIET_TIME` is deliberately *not* included: that state covers the
 /// first-hours-after-install grace period as much as real do-not-disturb, and
 /// treating it as "be quiet" surprises people.
 pub fn should_stay_quiet() -> bool {
+    // Test hook, unset in normal use.
+    //
+    // Windows offers no way to enter a do-not-disturb state on demand —
+    // `PresentationSettings.exe /start` is inert on desktop SKUs, and short of
+    // launching an exclusive-fullscreen D3D app there is nothing to trigger.
+    // Substituting the source is the only way to exercise this path end to end,
+    // and the alternative (shipping it unverified) is worse than one env lookup.
+    if let Ok(p) = std::env::var("BLIP_QUIET_FILE") {
+        return std::path::Path::new(&p).exists();
+    }
+
     match unsafe { SHQueryUserNotificationState() } {
         Ok(s) => {
             s == QUNS_BUSY || s == QUNS_RUNNING_D3D_FULL_SCREEN || s == QUNS_PRESENTATION_MODE

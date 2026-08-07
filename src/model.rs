@@ -17,6 +17,17 @@ pub enum Level {
 }
 
 impl Level {
+    /// Severity order, for picking the loudest level in a batch of arrivals.
+    /// Not a `PartialOrd` impl: comparing two notification levels with `<` reads
+    /// like it means something about time or count.
+    pub fn rank(self) -> u8 {
+        match self {
+            Level::Low => 0,
+            Level::Normal => 1,
+            Level::Critical => 2,
+        }
+    }
+
     pub fn parse(s: &str) -> Option<Level> {
         match s.to_ascii_lowercase().as_str() {
             "low" | "l" => Some(Level::Low),

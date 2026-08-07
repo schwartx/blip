@@ -59,7 +59,6 @@ pub struct Metrics {
     pub body_max_lines: usize,
     pub gap: f32,
 
-    pub close_size: f32,
     pub footer_h: f32,
     pub scrollbar_w: f32,
     /// Extra height reserved on rows that carry a progress bar.
@@ -82,7 +81,6 @@ impl Metrics {
             body_line_h: cfg.body_font_size * 1.4,
             body_max_lines: 3,
             gap: 3.0,
-            close_size: 20.0,
             footer_h: 34.0,
             scrollbar_w: 3.0,
             progress_h: 7.0,
@@ -90,10 +88,12 @@ impl Metrics {
         }
     }
 
-    /// Text width available inside a row, after the stripe, padding, and the
-    /// space reserved for the per-row dismiss button.
+    /// Text width available inside a row, after the stripe and the padding.
+    ///
+    /// Nothing is reserved on the right any more: with the per-row ✕ gone, the
+    /// full width belongs to the text.
     pub fn row_text_width(&self) -> f32 {
-        self.width - self.bar_w - self.row_pad_x * 2.0 - self.close_size - 4.0
+        self.width - self.bar_w - self.row_pad_x * 2.0
     }
 }
 
@@ -193,12 +193,6 @@ impl Layout {
         )
     }
 
-    /// Per-row dismiss button, top-right of the row.
-    pub fn close_rect(&self, row: &Rect) -> Rect {
-        let s = self.m.close_size;
-        Rect::xywh(row.r - s - 6.0, row.t + (row.h() - s).clamp(0.0, 6.0) + 2.0, s, s)
-    }
-
     pub fn is_on_screen(&self, g: &RowGeom, scroll: f32) -> bool {
         let top = g.y - scroll;
         let bottom = top + g.h;
@@ -213,9 +207,6 @@ impl Layout {
             for g in &self.rows {
                 let r = self.row_rect(g, scroll);
                 if r.contains(x, y) {
-                    if self.close_rect(&r).contains(x, y) {
-                        return Hit::RowClose(g.index, g.key);
-                    }
                     return Hit::Row(g.index, g.key);
                 }
             }
@@ -235,7 +226,6 @@ pub enum Hit {
     Outside,
     Background,
     Row(usize, u64),
-    RowClose(usize, u64),
     DismissAll,
 }
 
@@ -296,20 +286,6 @@ mod tests {
             let hit = l.hit(r.l + 20.0, r.t + r.h() / 2.0, 0.0);
             assert_eq!(hit, Hit::Row(g.index, g.key));
         }
-    }
-
-    #[test]
-    fn close_button_wins_over_row() {
-        let cfg = Config::default();
-        let m = Metrics::from_config(&cfg);
-        let items = vec![note(7, false)];
-        let l = Layout::build(&items, &m, |_| 0.0);
-        let r = l.row_rect(&l.rows[0], 0.0);
-        let c = l.close_rect(&r);
-        assert_eq!(
-            l.hit(c.l + c.w() / 2.0, c.t + c.h() / 2.0, 0.0),
-            Hit::RowClose(0, 7)
-        );
     }
 
     #[test]

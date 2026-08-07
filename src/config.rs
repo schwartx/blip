@@ -30,8 +30,13 @@ pub struct Config {
     pub font_size: f32,
     pub body_font_size: f32,
 
-    /// Skip sound (and, for `low`, the pop) while the user is presenting,
-    /// gaming full-screen, or in a Focus Assist quiet window.
+    /// Honour Windows' "don't interrupt me" states — presenting, full-screen
+    /// D3D, Focus Assist busy.
+    ///
+    /// While one is active, `low` and `normal` notifications are collected
+    /// silently instead of opening the panel, and the panel opens by itself
+    /// once the state ends. `critical` still breaks through, on the grounds
+    /// that an alert you only see three hours later isn't an alert.
     pub respect_quiet_hours: bool,
 
     pub sound: SoundConfig,

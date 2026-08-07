@@ -383,27 +383,6 @@ impl Renderer {
         }
     }
 
-    fn draw_x(&self, r: Rect, c: D2D1_COLOR_F) {
-        let pad = 6.0;
-        unsafe {
-            self.brush.SetColor(&c);
-            self.dc.DrawLine(
-                Vector2 { X: r.l + pad, Y: r.t + pad },
-                Vector2 { X: r.r - pad, Y: r.b - pad },
-                &self.brush,
-                1.3,
-                None,
-            );
-            self.dc.DrawLine(
-                Vector2 { X: r.r - pad, Y: r.t + pad },
-                Vector2 { X: r.l + pad, Y: r.b - pad },
-                &self.brush,
-                1.3,
-                None,
-            );
-        }
-    }
-
     // -- the frame ---------------------------------------------------------
 
     pub fn draw(&mut self, f: &Frame<'_>) -> Result<()> {
@@ -497,7 +476,7 @@ impl Renderer {
                     m.title_line_h,
                 )
             {
-                let br = Rect::xywh(r.r - m.close_size - 42.0, r.t + 9.0, 34.0, 17.0);
+                let br = Rect::xywh(r.r - m.row_pad_x - 34.0, r.t + 9.0, 34.0, 17.0);
                 self.fill_rr(br, 8.5, with_alpha(lvl, 0.22 * ra));
                 unsafe {
                     self.brush.SetColor(&scale_a(self.palette.title, ra));
@@ -508,16 +487,6 @@ impl Renderer {
                         D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
                     );
                 }
-            }
-
-            // Per-row dismiss appears only under the pointer. A permanent column
-            // of ✕ glyphs is visual noise on something you mostly just read.
-            if hovered {
-                let cr = l.close_rect(&r);
-                if f.hover_close {
-                    self.fill_rr(cr, 5.0, with_alpha(self.palette.button_hover, 0.9 * f.alpha));
-                }
-                self.draw_x(cr, with_alpha(self.palette.body, 0.85 * f.alpha));
             }
 
             if let Some(pct) = n.progress {
@@ -605,7 +574,6 @@ pub struct Frame<'a> {
     pub items: &'a [Notification],
     pub scroll: f32,
     pub hover_row: Option<usize>,
-    pub hover_close: bool,
     pub hover_button: bool,
     /// Whole-panel fade, 0..1.
     pub alpha: f32,
