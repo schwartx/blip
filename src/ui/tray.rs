@@ -11,7 +11,8 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, HICON, IDI_APPLICATION,
-    IDI_INFORMATION, LoadIconW, MF_SEPARATOR, MF_STRING, SetForegroundWindow, TPM_BOTTOMALIGN,
+    IDI_INFORMATION, LoadIconW, MF_GRAYED, MF_SEPARATOR, MF_STRING, SetForegroundWindow,
+    TPM_BOTTOMALIGN,
     TPM_RETURNCMD, TPM_RIGHTALIGN, TrackPopupMenu,
 };
 use windows::core::PCWSTR;
@@ -95,15 +96,21 @@ impl Tray {
     pub fn show_menu(&self, pinned: bool, count: usize) -> MenuAction {
         let Ok(menu) = (unsafe { CreatePopupMenu() }) else { return MenuAction::None };
 
-        let show = wide("显示面板");
+        // Carrying the count in the label means the menu answers "is there
+        // anything to look at?" before you click, and greying out when there
+        // isn't turns "I clicked and nothing happened" into "I can see why".
+        let show = wide(&format!("查看通知（{count}）"));
         let clear = wide(&format!("清空全部（{count}）"));
         let reset = wide(if pinned { "取消钉住 · 回到光标模式" } else { "位置：跟随光标" });
         let config = wide("打开配置文件");
         let quit = wide("退出 blip");
 
+        // An empty list makes both of these no-ops; say so up front.
+        let when_any = if count == 0 { MF_STRING | MF_GRAYED } else { MF_STRING };
+
         unsafe {
-            let _ = AppendMenuW(menu, MF_STRING, CMD_SHOW as usize, PCWSTR(show.as_ptr()));
-            let _ = AppendMenuW(menu, MF_STRING, CMD_CLEAR as usize, PCWSTR(clear.as_ptr()));
+            let _ = AppendMenuW(menu, when_any, CMD_SHOW as usize, PCWSTR(show.as_ptr()));
+            let _ = AppendMenuW(menu, when_any, CMD_CLEAR as usize, PCWSTR(clear.as_ptr()));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let _ = AppendMenuW(menu, MF_STRING, CMD_RESET as usize, PCWSTR(reset.as_ptr()));
             let _ = AppendMenuW(menu, MF_STRING, CMD_CONFIG as usize, PCWSTR(config.as_ptr()));

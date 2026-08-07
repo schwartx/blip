@@ -402,6 +402,14 @@ impl Panel {
         self.start_anim();
     }
 
+    /// User-initiated open. Distinct from `show()`, which is what an arriving
+    /// notification calls: by then there is always something to display.
+    fn show_if_any(&mut self) {
+        if self.store.live_count() > 0 {
+            self.show();
+        }
+    }
+
     fn begin_hide(&mut self) {
         if !self.visible {
             return;
@@ -774,21 +782,24 @@ impl Panel {
 
     fn on_tray(&mut self, event: u32) {
         match event {
-            WM_LBUTTONUP => self.show(),
+            // Opening an empty panel is indistinguishable from a broken click:
+            // it would appear and immediately auto-hide again, because "nothing
+            // left to show" is the same condition that dismisses it.
+            WM_LBUTTONUP => self.show_if_any(),
             WM_LBUTTONDBLCLK => {
                 self.anchor = Anchor::Cursor(position::cursor_pos());
                 self.refresh_tray();
-                self.show();
+                self.show_if_any();
             }
             WM_RBUTTONUP | WM_CONTEXTMENU => {
                 let pinned = self.pinned();
-                let count = self.store.len();
+                let count = self.store.live_count();
                 let action = match self.tray.as_ref() {
                     Some(t) => t.show_menu(pinned, count),
                     None => MenuAction::None,
                 };
                 match action {
-                    MenuAction::Show => self.show(),
+                    MenuAction::Show => self.show_if_any(),
                     MenuAction::ClearAll => {
                         self.store.clear();
                         self.begin_hide();
