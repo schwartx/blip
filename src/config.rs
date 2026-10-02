@@ -1,4 +1,4 @@
-//! Configuration, loaded from `%APPDATA%\blip\config.toml`.
+//! Configuration in the current user's application configuration directory.
 //!
 //! Every field has a working default — the goal is that `blip "text"` with no
 //! config file at all does the right thing.
@@ -97,7 +97,12 @@ pub struct SoundConfig {
 
 impl Default for SoundConfig {
     fn default() -> Self {
-        Self { enabled: true, low: String::new(), normal: String::new(), critical: String::new() }
+        Self {
+            enabled: true,
+            low: String::new(),
+            normal: String::new(),
+            critical: String::new(),
+        }
     }
 }
 
@@ -202,9 +207,7 @@ impl Default for Config {
             max_items: 50,
             max_visible_rows: 10,
             width: 340.0,
-            // Yahei is on every Chinese Windows install and DirectWrite handles
-            // fallback for anything it lacks.
-            font: "Microsoft YaHei UI".into(),
+            font: default_font().into(),
             font_size: 13.5,
             body_font_size: 12.0,
             respect_quiet_hours: true,
@@ -218,8 +221,18 @@ impl Default for Config {
 
 impl Config {
     pub fn dir() -> PathBuf {
-        let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
-        PathBuf::from(base).join("blip")
+        #[cfg(windows)]
+        {
+            let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
+            PathBuf::from(base).join("blip")
+        }
+        #[cfg(not(windows))]
+        {
+            config_dir(
+                std::env::var_os("HOME").map(PathBuf::from),
+                std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+            )
+        }
     }
 
     pub fn path() -> PathBuf {
@@ -252,6 +265,72 @@ impl Config {
     }
 }
 
+fn default_font() -> &'static str {
+    #[cfg(windows)]
+    {
+        "Microsoft YaHei UI"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "system"
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        "sans-serif"
+    }
+}
+
+#[cfg(not(windows))]
+fn config_dir(home: Option<PathBuf>, xdg: Option<PathBuf>) -> PathBuf {
+    let home = home.unwrap_or_else(|| PathBuf::from("."));
+    #[cfg(target_os = "macos")]
+    {
+        let _ = xdg;
+        home.join("Library/Application Support/blip")
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // XDG_CONFIG_HOME must be absolute; ignore an invalid relative value.
+        xdg.filter(|path| path.is_absolute())
+            .unwrap_or_else(|| home.join(".config"))
+            .join("blip")
+    }
+}
+
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configuration_uses_platform_directory() {
+        let home = Some(PathBuf::from("/Users/blip-test"));
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            config_dir(home, None),
+            PathBuf::from("/Users/blip-test/Library/Application Support/blip")
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(
+            config_dir(home, None),
+            PathBuf::from("/Users/blip-test/.config/blip")
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn xdg_configuration_requires_an_absolute_path() {
+        let home = Some(PathBuf::from("/home/blip-test"));
+        assert_eq!(
+            config_dir(home.clone(), Some(PathBuf::from("relative"))),
+            PathBuf::from("/home/blip-test/.config/blip")
+        );
+        assert_eq!(
+            config_dir(home, Some(PathBuf::from("/tmp/custom-config"))),
+            PathBuf::from("/tmp/custom-config/blip")
+        );
+    }
+}
+
 /// Parse `#RGB`, `#RRGGBB` or `#RRGGBBAA` into straight (non-premultiplied) RGBA.
 pub fn parse_color(s: &str) -> (f32, f32, f32, f32) {
     let h = s.trim().trim_start_matches('#');
@@ -259,7 +338,9 @@ pub fn parse_color(s: &str) -> (f32, f32, f32, f32) {
     match h.len() {
         3 => {
             let n = |i: usize| {
-                u8::from_str_radix(&h[i..i + 1], 16).map(|v| (v * 17) as f32 / 255.0).unwrap_or(0.0)
+                u8::from_str_radix(&h[i..i + 1], 16)
+                    .map(|v| (v * 17) as f32 / 255.0)
+                    .unwrap_or(0.0)
             };
             (n(0), n(1), n(2), 1.0)
         }

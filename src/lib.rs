@@ -9,6 +9,18 @@ pub mod ipc;
 pub mod model;
 pub mod store;
 
+// Geometry is shared by rendering backends and can be tested without a desktop.
+#[path = "ui/layout.rs"]
+pub mod layout;
+
+#[cfg(target_os = "macos")]
+pub mod macos;
+
+// Exercise the AppKit coordinate math on development hosts without AppKit.
+#[cfg(all(test, not(target_os = "macos")))]
+#[path = "macos/position.rs"]
+mod macos_position_tests;
+
 #[cfg(windows)]
 pub mod ui;
 

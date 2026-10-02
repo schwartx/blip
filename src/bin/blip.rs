@@ -1,7 +1,7 @@
 //! The CLI client.
 //!
 //! Console subsystem so it composes in a pipeline. It does almost nothing:
-//! parse args, write one message to the named pipe, exit. Typical round trip is
+//! parse args, write one message to the local transport, exit. Typical round trip is
 //! well under 10ms because the expensive parts — GPU device, audio device,
 //! window — already exist inside the daemon.
 //!
@@ -94,7 +94,9 @@ fn parse(args: &[String]) -> Result<Option<Command>, String> {
     // treating the next flag as the value.
     let need = |i: &mut usize, flag: &str| -> Result<String, String> {
         *i += 1;
-        args.get(*i).cloned().ok_or_else(|| format!("{flag} needs a value"))
+        args.get(*i)
+            .cloned()
+            .ok_or_else(|| format!("{flag} needs a value"))
     };
 
     while i < args.len() {
@@ -121,7 +123,9 @@ fn parse(args: &[String]) -> Result<Option<Command>, String> {
             "--quit" => return Ok(Some(Command::Quit)),
             "--show" => return Ok(Some(Command::Show)),
             "--dismiss" => {
-                return Ok(Some(Command::Dismiss { id: need(&mut i, "--dismiss")? }));
+                return Ok(Some(Command::Dismiss {
+                    id: need(&mut i, "--dismiss")?,
+                }));
             }
 
             "-t" | "--title" => req.title = need(&mut i, "--title")?,
@@ -133,29 +137,36 @@ fn parse(args: &[String]) -> Result<Option<Command>, String> {
 
             "-l" | "--level" => {
                 let v = need(&mut i, "--level")?;
-                req.level = Some(
-                    Level::parse(&v).ok_or_else(|| format!("unknown level `{v}`"))?,
-                );
+                req.level = Some(Level::parse(&v).ok_or_else(|| format!("unknown level `{v}`"))?);
             }
             "--ttl" => {
                 let v = need(&mut i, "--ttl")?;
-                req.ttl = Some(v.parse().map_err(|_| format!("--ttl `{v}` is not a number"))?);
+                req.ttl = Some(
+                    v.parse()
+                        .map_err(|_| format!("--ttl `{v}` is not a number"))?,
+                );
             }
             "--sticky" => req.ttl = Some(0.0),
             "--if-idle" => {
                 let v = need(&mut i, "--if-idle")?;
-                req.if_idle =
-                    Some(v.parse().map_err(|_| format!("--if-idle `{v}` is not a number"))?);
+                req.if_idle = Some(
+                    v.parse()
+                        .map_err(|_| format!("--if-idle `{v}` is not a number"))?,
+                );
             }
             "--progress" => {
                 let v = need(&mut i, "--progress")?;
-                let n: u32 =
-                    v.parse().map_err(|_| format!("--progress `{v}` is not a number"))?;
+                let n: u32 = v
+                    .parse()
+                    .map_err(|_| format!("--progress `{v}` is not a number"))?;
                 req.progress = Some(n.min(100) as u8);
             }
             "--exit-code" => {
                 let v = need(&mut i, "--exit-code")?;
-                exit_code = Some(v.parse().map_err(|_| format!("--exit-code `{v}` is not a number"))?);
+                exit_code = Some(
+                    v.parse()
+                        .map_err(|_| format!("--exit-code `{v}` is not a number"))?,
+                );
             }
             "--stdin" => use_stdin = true,
 
@@ -181,13 +192,18 @@ fn parse(args: &[String]) -> Result<Option<Command>, String> {
 
     if use_stdin {
         let mut buf = String::new();
-        std::io::stdin().read_to_string(&mut buf).map_err(|e| e.to_string())?;
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .map_err(|e| e.to_string())?;
         let text = buf.trim_end();
         if req.title.is_empty() {
             // No title given: first line becomes the headline, rest the body.
             let mut lines = text.splitn(2, '\n');
             req.title = lines.next().unwrap_or("").trim().to_string();
-            req.body = lines.next().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+            req.body = lines
+                .next()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
         } else {
             req.body = Some(text.to_string()).filter(|s| !s.is_empty());
         }
@@ -197,11 +213,18 @@ fn parse(args: &[String]) -> Result<Option<Command>, String> {
     // level and a sensible default title fall out of it automatically.
     if let Some(code) = exit_code {
         if req.level.is_none() {
-            req.level = Some(if code == 0 { Level::Normal } else { Level::Critical });
+            req.level = Some(if code == 0 {
+                Level::Normal
+            } else {
+                Level::Critical
+            });
         }
         if req.title.is_empty() {
-            req.title =
-                if code == 0 { "完成".to_string() } else { format!("失败（退出码 {code}）") };
+            req.title = if code == 0 {
+                "完成".to_string()
+            } else {
+                format!("失败（退出码 {code}）")
+            };
         } else if code != 0 && req.body.is_none() {
             req.body = Some(format!("退出码 {code}"));
         }
@@ -239,6 +262,7 @@ fn deliver(cmd: &Command) -> Result<(), String> {
     pipe::send(cmd)
 }
 
+#[cfg(windows)]
 fn spawn_daemon() -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     // Detached, so the daemon isn't killed when this short-lived CLI process
@@ -279,6 +303,7 @@ fn spawn_daemon() -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(windows)]
 fn clear_std_handle_inheritance() {
     use windows::Win32::Foundation::{HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation};
     use windows::Win32::System::Console::{
@@ -291,5 +316,89 @@ fn clear_std_handle_inheritance() {
         {
             let _ = unsafe { SetHandleInformation(h, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0)) };
         }
+    }
+}
+
+#[cfg(unix)]
+fn spawn_daemon() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        // Launch packaged builds through Launch Services so macOS recognizes
+        // their bundle identity and menu-bar app lifecycle. `current_exe`
+        // resolves a CLI symlink to the executable inside the app bundle.
+        if let Some(app) = app_bundle(&exe) {
+            return launch_app(&app);
+        }
+    }
+
+    let daemon = exe.with_file_name("blipd");
+    if !daemon.is_file() {
+        #[cfg(target_os = "macos")]
+        {
+            let installed = std::iter::once(std::path::PathBuf::from("/Applications/Blip.app"))
+                .chain(
+                    std::env::var_os("HOME")
+                        .map(|home| std::path::PathBuf::from(home).join("Applications/Blip.app")),
+                );
+            for app in installed {
+                if app.join("Contents/MacOS/blipd").is_file() {
+                    return launch_app(&app);
+                }
+            }
+        }
+        return Err(format!("blipd not found next to {}", exe.display()));
+    }
+
+    // Cargo-built binaries also work without a bundle. Start an independent
+    // session and detach standard IO so command substitution can return.
+    use std::os::unix::process::CommandExt;
+    let mut command = std::process::Command::new(&daemon);
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+    command
+        .spawn()
+        .map_err(|e| format!("could not start blipd: {e}"))?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn app_bundle(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let app = contents.parent()?;
+    (macos.file_name()? == "MacOS"
+        && contents.file_name()? == "Contents"
+        && app.extension()? == "app"
+        && macos.join("blipd").is_file())
+    .then(|| app.to_path_buf())
+}
+
+#[cfg(target_os = "macos")]
+fn launch_app(app: &std::path::Path) -> Result<(), String> {
+    let status = std::process::Command::new("/usr/bin/open")
+        .arg("-g")
+        .arg("-a")
+        .arg(app)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|e| format!("could not open {}: {e}", app.display()))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("could not open {}: {status}", app.display()))
     }
 }

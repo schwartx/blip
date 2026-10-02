@@ -77,7 +77,7 @@ fn current() -> Option<String> {
     }
 
     let units: Vec<u16> =
-        buf.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        buf.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
     let text = String::from_utf16_lossy(&units);
     // REG_SZ is not required to be terminated, and when it is, the terminator
     // is part of the returned length.
