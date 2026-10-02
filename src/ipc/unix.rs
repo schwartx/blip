@@ -547,6 +547,17 @@ mod tests {
         thread.join().unwrap();
     }
 
+    #[test]
+    fn a_closed_peer_keeps_its_buffered_payload_readable() {
+        let (mut writer, mut reader) = UnixStream::pair().unwrap();
+        writer.write_all(b"{\"cmd\":\"show\"}").unwrap();
+        // Darwin rejects setsockopt after a peer fully closes, even while its
+        // buffered payload remains readable. Configure nonblocking IO and
+        // drain the data without installing SO_RCVTIMEO on the closed socket.
+        drop(writer);
+        assert_eq!(read_payload(&mut reader).unwrap(), b"{\"cmd\":\"show\"}");
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn a_full_accept_queue_does_not_block_connection_indefinitely() {
