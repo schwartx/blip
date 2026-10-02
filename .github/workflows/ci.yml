@@ -49,7 +49,21 @@ jobs:
           restore-keys: ${{ matrix.os }}-cargo-
 
       - name: Test
-        run: cargo test --locked
+        shell: bash
+        run: |
+          # Keep failing Rust diagnostics on the check itself as well as in logs.
+          if cargo test --locked > "$RUNNER_TEMP/blip-tests.log" 2>&1; then
+            cat "$RUNNER_TEMP/blip-tests.log"
+          else
+            result=$?
+            cat "$RUNNER_TEMP/blip-tests.log"
+            diagnostics=$(tail -60 "$RUNNER_TEMP/blip-tests.log")
+            diagnostics=${diagnostics//'%'/'%25'}
+            diagnostics=${diagnostics//$'\r'/'%0D'}
+            diagnostics=${diagnostics//$'\n'/'%0A'}
+            printf '::error title=Rust tests failed::%s\n' "$diagnostics"
+            exit "$result"
+          fi
 
       - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
