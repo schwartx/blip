@@ -174,15 +174,46 @@ fn remaining(deadline: Instant) -> io::Result<Duration> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "local IPC timed out"))
 }
 
+fn wait_io(stream: &UnixStream, events: libc::c_short, deadline: Instant) -> io::Result<()> {
+    loop {
+        let left = remaining(deadline)?;
+        let mut poll = libc::pollfd {
+            fd: stream.as_raw_fd(),
+            events,
+            revents: 0,
+        };
+        // Round up so a sub-millisecond remainder cannot become a busy poll.
+        let milliseconds = left.as_millis().saturating_add(1).min(i32::MAX as u128) as i32;
+        match unsafe { libc::poll(&mut poll, 1, milliseconds) } {
+            -1 => {
+                let error = io::Error::last_os_error();
+                if error.kind() != io::ErrorKind::Interrupted {
+                    return Err(error);
+                }
+            }
+            0 => {} // Recheck the absolute deadline after a timed wait.
+            _ if poll.revents & libc::POLLNVAL != 0 => {
+                return Err(io::Error::from_raw_os_error(libc::EBADF));
+            }
+            _ if poll.revents & (events | libc::POLLERR | libc::POLLHUP) != 0 => {
+                // Let read/write report EOF or the socket error. POLLHUP may
+                // accompany unread data, which must be drained before EOF.
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+}
+
 fn read_payload(stream: &mut UnixStream) -> io::Result<Vec<u8>> {
-    // Darwin/BSD inherit O_NONBLOCK from the listener on accepted sockets.
-    // Restore blocking reads so SO_RCVTIMEO provides the bounded deadline.
-    stream.set_nonblocking(false)?;
+    // Use the same readiness/deadline rules on Darwin and Linux rather than
+    // relying on platform-specific socket timeout behavior after half-close.
+    stream.set_nonblocking(true)?;
     let deadline = Instant::now() + IO_TIMEOUT;
     let mut bytes = Vec::new();
     let mut chunk = [0u8; 4096];
     loop {
-        stream.set_read_timeout(Some(remaining(deadline)?))?;
+        remaining(deadline)?;
         match stream.read(&mut chunk) {
             Ok(0) => return Ok(bytes),
             Ok(n) => {
@@ -195,6 +226,9 @@ fn read_payload(stream: &mut UnixStream) -> io::Result<Vec<u8>> {
                 bytes.extend_from_slice(&chunk[..n]);
             }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                wait_io(stream, libc::POLLIN, deadline)?;
+            }
             Err(e) => return Err(e),
         }
     }
@@ -328,16 +362,18 @@ fn send_at(dir: &Path, cmd: &Command) -> Result<(), String> {
         return Err("local IPC payload exceeds 64 KiB".into());
     }
     let mut stream = connect(dir)?;
+    stream.set_nonblocking(true).map_err(|e| e.to_string())?;
     let deadline = Instant::now() + IO_TIMEOUT;
     let mut written = 0;
     while written < payload.len() {
-        stream
-            .set_write_timeout(Some(remaining(deadline).map_err(|e| e.to_string())?))
-            .map_err(|e| e.to_string())?;
+        remaining(deadline).map_err(|e| e.to_string())?;
         match stream.write(&payload[written..]) {
             Ok(0) => return Err("local IPC write returned zero bytes".into()),
             Ok(n) => written += n,
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                wait_io(&stream, libc::POLLOUT, deadline).map_err(|e| e.to_string())?;
+            }
             Err(e) => return Err(format!("local IPC write failed: {e}")),
         }
     }
@@ -482,7 +518,8 @@ mod tests {
     #[test]
     fn stalled_client_is_bounded() {
         let (_writer, mut reader) = UnixStream::pair().unwrap();
-        // Exercise inherited O_NONBLOCK even on hosts whose accept clears it.
+        // Both newly created blocking sockets and inherited nonblocking ones
+        // use the same readiness loop and total deadline.
         reader.set_nonblocking(true).unwrap();
         let started = Instant::now();
         let error = read_payload(&mut reader).unwrap_err();
@@ -492,9 +529,22 @@ mod tests {
         ));
         assert!(
             started.elapsed() >= IO_TIMEOUT,
-            "a nonblocking inherited socket must not fail before its deadline"
+            "a stalled socket must not fail before its deadline"
         );
         assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn delayed_chunks_are_drained_before_half_closed_eof() {
+        let (mut writer, mut reader) = UnixStream::pair().unwrap();
+        let thread = std::thread::spawn(move || {
+            writer.write_all(b"{\"cmd\":").unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+            writer.write_all(b"\"show\"}\n").unwrap();
+            writer.shutdown(Shutdown::Write).unwrap();
+        });
+        assert_eq!(read_payload(&mut reader).unwrap(), b"{\"cmd\":\"show\"}\n");
+        thread.join().unwrap();
     }
 
     #[cfg(target_os = "linux")]
