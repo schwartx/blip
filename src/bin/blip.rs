@@ -321,12 +321,17 @@ fn clear_std_handle_inheritance() {
 
 #[cfg(unix)]
 fn spawn_daemon() -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    // macOS may preserve symlinks in _NSGetExecutablePath. Resolve the actual
+    // executable before locating its app bundle or sibling daemon.
+    let exe = std::env::current_exe()
+        .map_err(|e| e.to_string())?
+        .canonicalize()
+        .map_err(|e| format!("could not resolve CLI executable path: {e}"))?;
     #[cfg(target_os = "macos")]
     {
         // Launch packaged builds through Launch Services so macOS recognizes
-        // their bundle identity and menu-bar app lifecycle. `current_exe`
-        // resolves a CLI symlink to the executable inside the app bundle.
+        // their bundle identity and menu-bar app lifecycle. Canonicalization
+        // keeps a CLI symlink associated with the app bundle it points to.
         if let Some(app) = app_bundle(&exe) {
             return launch_app(&app);
         }
