@@ -1,0 +1,91 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: windows-latest
+          - os: macos-15
+            target: aarch64-apple-darwin
+            arch: arm64
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup update --no-self-update stable
+          rustup default stable
+          rustup component add clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ matrix.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ matrix.os }}-cargo-
+
+      - name: Test
+        shell: bash
+        run: |
+          # Keep failing Rust diagnostics on the check itself as well as in logs.
+          if cargo test --locked > "$RUNNER_TEMP/blip-tests.log" 2>&1; then
+            cat "$RUNNER_TEMP/blip-tests.log"
+          else
+            result=$?
+            cat "$RUNNER_TEMP/blip-tests.log"
+            diagnostics=$(tail -60 "$RUNNER_TEMP/blip-tests.log")
+            diagnostics=${diagnostics//'%'/'%25'}
+            diagnostics=${diagnostics//$'\r'/'%0D'}
+            diagnostics=${diagnostics//$'\n'/'%0A'}
+            printf '::error title=Rust tests failed::%s\n' "$diagnostics"
+            exit "$result"
+          fi
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Windows target check
+        if: runner.os == 'Windows'
+        run: cargo check --locked --all-targets
+
+      - name: Build macOS bundle
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '11.0'
+        run: |
+          rustup target add '${{ matrix.target }}'
+          cargo build --release --locked --target '${{ matrix.target }}'
+          ./scripts/package-macos.sh --no-build --target '${{ matrix.target }}'
+
+      - name: Upload macOS bundle
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: blip-macos-${{ matrix.arch }}
+          path: dist/blip-*-macos-${{ matrix.arch }}.zip
+          if-no-files-found: error

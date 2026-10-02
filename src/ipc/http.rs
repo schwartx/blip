@@ -80,7 +80,8 @@ fn handle(mut stream: TcpStream, bridge: &Bridge) {
             // Unparseable means "pop normally". A typo in a hook URL should not
             // silently make a notification stop appearing.
             let if_idle = param(&query, "if_idle").and_then(|v| v.parse::<f32>().ok());
-            match crate::ipc::hook::from_claude(&String::from_utf8_lossy(&req.body), level, if_idle) {
+            match crate::ipc::hook::from_claude(&String::from_utf8_lossy(&req.body), level, if_idle)
+            {
                 Ok(n) => {
                     bridge.send(Command::Notify(n));
                     // Empty body, not `{"ok":true}`: Claude Code parses a 2xx
@@ -136,8 +137,15 @@ fn decode_notify(req: &Request) -> Result<NotifyRequest, String> {
         }
         let mut lines = text.splitn(2, '\n');
         let title = lines.next().unwrap_or("").trim().to_string();
-        let body = lines.next().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-        Ok(NotifyRequest { title, body, ..Default::default() })
+        let body = lines
+            .next()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        Ok(NotifyRequest {
+            title,
+            body,
+            ..Default::default()
+        })
     }
 }
 
@@ -162,7 +170,9 @@ fn parse(stream: &mut TcpStream) -> Option<Request> {
         if h.is_empty() {
             break;
         }
-        let Some((k, v)) = h.split_once(':') else { continue };
+        let Some((k, v)) = h.split_once(':') else {
+            continue;
+        };
         let (k, v) = (k.trim().to_ascii_lowercase(), v.trim());
         match k.as_str() {
             "content-length" => len = v.parse().unwrap_or(0),
@@ -179,7 +189,12 @@ fn parse(stream: &mut TcpStream) -> Option<Request> {
         reader.read_exact(&mut body).ok()?;
     }
 
-    Some(Request { method, path, content_type, body })
+    Some(Request {
+        method,
+        path,
+        content_type,
+        body,
+    })
 }
 
 fn respond(stream: &mut TcpStream, code: u16, msg: &str) {
@@ -224,4 +239,129 @@ fn respond_json(stream: &mut TcpStream, code: u16, body: &str) {
         body.len()
     );
     let _ = stream.write_all(payload.as_bytes());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Level;
+    use std::sync::mpsc::{Receiver, channel};
+
+    // Exercise the real socket parser and command bridge, with one connection
+    // per test so no background listener leaks into the next test.
+    fn request(
+        method: &str,
+        path: &str,
+        content_type: &str,
+        body: &str,
+    ) -> (String, Receiver<Command>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (tx, rx) = channel();
+        let (bridge, _) = Bridge::new(tx);
+        let worker = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            handle(stream, &bridge);
+        });
+        let mut stream = TcpStream::connect(address).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        write!(
+            stream,
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ).unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        worker.join().unwrap();
+        (response, rx)
+    }
+
+    #[test]
+    fn health_reports_version_without_dispatching_a_command() {
+        let (response, rx) = request("GET", "/health", "", "");
+        assert!(response.starts_with("HTTP/1.1 200"));
+        let body: serde_json::Value =
+            serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["version"], crate::VERSION);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn unicode_plain_text_reaches_the_notification_bridge() {
+        let (response, rx) = request(
+            "POST",
+            "/notify",
+            "text/plain",
+            "构建完成\nmacOS 与 Windows",
+        );
+        assert!(response.starts_with("HTTP/1.1 200"));
+        let Command::Notify(note) = rx.try_recv().unwrap() else {
+            panic!("expected notification")
+        };
+        assert_eq!(note.title, "构建完成");
+        assert_eq!(note.body.as_deref(), Some("macOS 与 Windows"));
+    }
+
+    #[test]
+    fn json_progress_and_idle_condition_are_preserved() {
+        let (response, rx) = request(
+            "POST",
+            "/notify",
+            "application/json",
+            r#"{"title":"Build","id":"build","progress":60,"level":"critical","if_idle":15}"#,
+        );
+        assert!(response.starts_with("HTTP/1.1 200"));
+        let Command::Notify(note) = rx.try_recv().unwrap() else {
+            panic!("expected notification")
+        };
+        assert_eq!(note.id.as_deref(), Some("build"));
+        assert_eq!(note.progress, Some(60));
+        assert_eq!(note.level, Some(Level::Critical));
+        assert_eq!(note.if_idle, Some(15.0));
+    }
+
+    #[test]
+    fn macos_claude_hook_dispatches_and_returns_an_empty_success() {
+        let (response, rx) = request(
+            "POST",
+            "/hook/claude?level=normal&if_idle=15",
+            "application/json",
+            r#"{"cwd":"/Users/me/projects/blip","session_id":"mac-session","last_assistant_message":"Done","hook_event_name":"Stop"}"#,
+        );
+        assert!(response.starts_with("HTTP/1.1 200"));
+        assert_eq!(response.split_once("\r\n\r\n").unwrap().1, "");
+        let Command::Notify(note) = rx.try_recv().unwrap() else {
+            panic!("expected notification")
+        };
+        assert_eq!(note.title, "blip");
+        assert_eq!(note.id.as_deref(), Some("cc-mac-session"));
+        assert_eq!(note.body.as_deref(), Some("Done"));
+        assert_eq!(note.if_idle, Some(15.0));
+    }
+
+    #[test]
+    fn dismiss_and_clear_dispatch_their_commands() {
+        let (response, rx) = request("DELETE", "/notify/build", "", "");
+        assert!(response.starts_with("HTTP/1.1 200"));
+        assert!(matches!(rx.try_recv().unwrap(), Command::Dismiss { id } if id == "build"));
+        let (response, rx) = request("POST", "/clear", "", "");
+        assert!(response.starts_with("HTTP/1.1 200"));
+        assert!(matches!(rx.try_recv().unwrap(), Command::Clear));
+    }
+
+    #[test]
+    fn malformed_json_does_not_dispatch() {
+        let (response, rx) = request("POST", "/notify", "application/json", "{broken");
+        assert!(response.starts_with("HTTP/1.1 400"));
+        assert!(rx.try_recv().is_err());
+    }
 }

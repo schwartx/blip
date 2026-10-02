@@ -3,7 +3,12 @@
 
 pub mod hook;
 pub mod http;
+#[cfg(windows)]
 pub mod pipe;
+#[cfg(unix)]
+pub mod unix;
+#[cfg(unix)]
+pub use unix as pipe;
 
 use crate::model::Command;
 use std::sync::mpsc::Sender;
@@ -14,23 +19,32 @@ use std::sync::mpsc::Sender;
 #[derive(Clone)]
 pub struct Bridge {
     tx: Sender<Command>,
-    /// The panel HWND as a raw isize so this stays `Send`. Zero until the
-    /// window exists, which is fine — early commands just queue up.
+    /// The Windows panel HWND. AppKit drains the channel on its main thread.
+    #[cfg(windows)]
     wake: std::sync::Arc<std::sync::atomic::AtomicIsize>,
 }
 
 impl Bridge {
     pub fn new(tx: Sender<Command>) -> (Self, std::sync::Arc<std::sync::atomic::AtomicIsize>) {
         let wake = std::sync::Arc::new(std::sync::atomic::AtomicIsize::new(0));
-        (Bridge { tx, wake: wake.clone() }, wake)
+        (
+            Bridge {
+                tx,
+                #[cfg(windows)]
+                wake: wake.clone(),
+            },
+            wake,
+        )
     }
 
     pub fn send(&self, cmd: Command) {
-        if self.tx.send(cmd).is_err() {
-            return;
-        }
+        #[cfg(not(windows))]
+        let _ = self.tx.send(cmd);
         #[cfg(windows)]
         {
+            if self.tx.send(cmd).is_err() {
+                return;
+            }
             use std::sync::atomic::Ordering;
             let h = self.wake.load(Ordering::Relaxed);
             if h != 0 {

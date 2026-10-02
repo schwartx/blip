@@ -9,7 +9,7 @@
 //! loser exits quietly. That matters because the CLI spawns the daemon
 //! optimistically, so two racing `blip` invocations will both try.
 
-#![windows_subsystem = "windows"]
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 use std::sync::Arc;
 use std::sync::mpsc::channel;
@@ -32,16 +32,17 @@ fn main() {
     // We are the daemon, so whatever path the Run key holds should be ours.
     // Corrects the entry after a move or reinstall, which would otherwise leave
     // a checked menu item pointing at an exe that no longer exists.
+    #[cfg(windows)]
     blip::ui::autostart::heal();
 
     let (tx, rx) = channel::<Command>();
     let (bridge, wake) = Bridge::new(tx);
 
-    {
+    let local_thread = {
         let pipe = pipe.clone();
         let bridge = bridge.clone();
-        std::thread::spawn(move || pipe.serve(bridge));
-    }
+        std::thread::spawn(move || pipe.serve(bridge))
+    };
 
     {
         let bind = cfg.bind.clone();
@@ -75,19 +76,65 @@ fn main() {
         }));
     }
 
+    #[cfg(windows)]
     if let Err(e) = blip::ui::window::run(cfg, rx, wake, pipe) {
         fatal(&format!("blip: 面板初始化失败\n\n{e}"));
+    }
+    #[cfg(windows)]
+    let _ = local_thread;
+
+    #[cfg(unix)]
+    {
+        let _ = wake;
+        #[cfg(target_os = "macos")]
+        if let Err(e) = blip::macos::run(cfg, rx, pipe.clone()) {
+            fatal(&format!("blip: panel initialization failed: {e}"));
+        }
+        #[cfg(not(target_os = "macos"))]
+        run_headless(cfg, rx);
+        pipe.stop();
+        let _ = local_thread.join();
+        drop(pipe);
     }
 }
 
 /// The one place a message box is justified: the panel can't report on itself
 /// when the panel is what failed.
+#[cfg(windows)]
 fn fatal(msg: &str) {
     use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
     use windows::core::PCWSTR;
     let text = blip::wide(msg);
     let title = blip::wide("blip");
     unsafe {
-        MessageBoxW(None, PCWSTR(text.as_ptr()), PCWSTR(title.as_ptr()), MB_OK | MB_ICONERROR);
+        MessageBoxW(
+            None,
+            PCWSTR(text.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn fatal(msg: &str) {
+    eprintln!("{msg}");
+}
+
+/// Unix development hosts can exercise the shared CLI and HTTP transports.
+/// The desktop panel is provided by the Windows and macOS backends.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn run_headless(cfg: Config, rx: std::sync::mpsc::Receiver<Command>) {
+    let mut store = blip::store::Store::new();
+    for cmd in rx {
+        match cmd {
+            Command::Notify(req) => {
+                store.push(req, &cfg);
+            }
+            Command::Dismiss { id } => store.dismiss_id(&id),
+            Command::Clear => store.clear(),
+            Command::Quit => break,
+            Command::Show | Command::Ping => {}
+        }
     }
 }

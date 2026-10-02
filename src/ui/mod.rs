@@ -2,7 +2,7 @@
 
 pub mod audio;
 pub mod autostart;
-pub mod layout;
+pub use crate::layout;
 pub mod position;
 pub mod render;
 pub mod tray;
